@@ -9,6 +9,11 @@ if let other = others.first, Bundle.main.bundleIdentifier != nil {
     exit(0)
 }
 
+if let dir = ProcessInfo.processInfo.environment["REEL_SNAPSHOT"] {
+    Snapshot.run(into: URL(fileURLWithPath: dir))
+    exit(0)
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

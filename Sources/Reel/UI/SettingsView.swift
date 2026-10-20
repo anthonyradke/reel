@@ -58,7 +58,11 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @EnvironmentObject var store: ConfigStore
     @EnvironmentObject var engine: EngineState
-    @State private var page: SettingsPage? = .general
+    @State private var page: SettingsPage?
+
+    init(page: SettingsPage = .general) {
+        _page = State(initialValue: page)
+    }
 
     var body: some View {
         NavigationSplitView {
