@@ -30,7 +30,7 @@ final class TrackedApp {
 final class TrackedWindow {
     let id: WindowID
     let element: AXUIElement
-    unowned let app: TrackedApp
+    let app: TrackedApp
     var title: String
     var subrole: String
     /// Height when the window first appeared, for Keep Original Height.

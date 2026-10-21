@@ -442,6 +442,8 @@ final class WindowManager: WindowTrackerDelegate {
     }
 
     func tracker(_ t: WindowTracker, didRemove w: TrackedWindow) {
+        animator.forget(w.id)
+        healAttempts[w.id] = nil
         floating.remove(w.id)
         userFloated.remove(w.id)
         userTiled.remove(w.id)
@@ -454,7 +456,6 @@ final class WindowManager: WindowTrackerDelegate {
         let previous = strips[k]?.focused
         strips[k]?.remove(w.id)
         if strips[k]?.isEmpty == true { strips[k] = Strip() }
-        animator.forget(w.id)
         ensureFocusedVisible(k, previous: previous)
         layout(k, animated: true)
         // Focus moves to the neighbour that took the closed window's place.
@@ -494,10 +495,14 @@ final class WindowManager: WindowTrackerDelegate {
 
     func tracker(_ t: WindowTracker, windowMoved w: TrackedWindow) {
         guard running else { return }
+        // Our own animation frames: nothing to look into (and asking the app costs a round trip).
+        if CACurrentMediaTime() - w.lastCommandedAt < 0.3 && drag?.window != w.group { return }
         if isUserAction(w) {
             if drag == nil, key(containing: w.group) != nil {
                 drag = DragState(window: w.group, startFrame: w.lastCommanded ?? (w.frame ?? .zero))
                 animator.freeze(w.group)
+                // The border would stay behind while the window is dragged away.
+                overlays.updateFocus(nil)
             }
         }
         if w.isFullscreen, let k = key(containing: w.group) {
@@ -510,6 +515,7 @@ final class WindowManager: WindowTrackerDelegate {
 
     func tracker(_ t: WindowTracker, windowResized w: TrackedWindow) {
         guard running else { return }
+        if CACurrentMediaTime() - w.lastCommandedAt < 0.3 && drag?.window != w.group { return }
         if isUserAction(w) {
             if drag == nil, key(containing: w.group) != nil {
                 drag = DragState(window: w.group, startFrame: w.lastCommanded ?? (w.frame ?? .zero))

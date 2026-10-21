@@ -61,7 +61,12 @@ swift test                      # layout and strip logic
 ./scripts/build-app.sh          # build/Reel.app
 ./scripts/build-app.sh --dmg    # also build/Reel.dmg
 ./scripts/build-app.sh --install
+python3 scripts/live-test.py    # drives the installed app with TextEdit windows
 ```
+
+The live test opens four TextEdit windows and runs the actions through `reelctl`. After each step it checks that
+every window really sits where Reel meant to put it, that nothing overlaps, and that scrolled-away windows are off
+screen. It moves real windows around for about a minute.
 
 The build script signs with the first Apple Development or Developer ID identity it finds, or ad hoc if there isn't
 one. Signing with the same identity every time keeps the Accessibility permission across rebuilds.
