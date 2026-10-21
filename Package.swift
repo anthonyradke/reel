@@ -21,6 +21,8 @@ let package = Package(
             ]
         ),
         .executableTarget(name: "reelctl", dependencies: ["ReelCore"]),
+        // Renders the animated demos in docs/ from the real layout code: swift run reel-demos docs
+        .executableTarget(name: "reel-demos", dependencies: ["ReelCore"]),
         .testTarget(name: "ReelCoreTests", dependencies: ["ReelCore"]),
     ]
 )

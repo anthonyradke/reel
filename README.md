@@ -18,7 +18,7 @@ than the screen, it scrolls with the keyboard or a three or four finger trackpad
 It's a native AppKit app with no scripting layer to set up and no dependencies outside the system frameworks.
 
 <p align="center">
-  <img src="docs/settings-layout.jpg" width="800" alt="Reel's layout settings">
+  <img src="docs/demo-scroll.gif" width="800" alt="Moving focus along the strip with the keyboard">
 </p>
 
 ## Features
@@ -37,6 +37,15 @@ It's a native AppKit app with no scripting layer to set up and no dependencies o
 - Optional focus border, dimming of unfocused windows, and a strip overview at the top of the screen that can be
   clicked or dragged to reorder columns.
 - Every shortcut can be rebound. Settings are a plain JSON file that reloads on save.
+
+<p align="center">
+  <img src="docs/demo-open.gif" width="49%" alt="A new window opening beside the focused one">
+  <img src="docs/demo-widths.gif" width="49%" alt="Cycling preset widths and full width">
+</p>
+<p align="center">
+  <img src="docs/demo-swipe.gif" width="49%" alt="Scrolling the strip with a trackpad swipe">
+  <img src="docs/demo-stack.gif" width="49%" alt="Stacking windows in a column and showing them as tabs">
+</p>
 
 ## Requirements
 
@@ -91,6 +100,10 @@ Inside a stack:
   of a stack onto another column does the same.
 
 ## Configuration
+
+<p align="center">
+  <img src="docs/settings-layout.jpg" width="800" alt="Reel's layout settings">
+</p>
 
 Everything is set from the settings window (⌃⌥ ,). The same settings live in a JSON file that can be edited by hand
 and is reloaded as soon as it's saved.
@@ -154,10 +167,13 @@ screen. It takes about a minute and moves real windows, so run it when you're no
 ### Screenshots and demo
 
 ```sh
+swift run -c release reel-demos docs         # the animated demos in docs/
 REEL_SNAPSHOT=/tmp/shots .build/debug/Reel   # every settings page, plus hero-*.png on a wallpaper
-python3 scripts/record-demo.py               # records the strip in action into docs/demo.gif
+python3 scripts/record-demo.py               # a real screen recording, into docs/demo.gif
 ```
 
-The demo script opens captioned TextEdit windows, drives them through `reelctl` while `screencapture` records the
+`reel-demos` draws the demos rather than recording them: it runs each script of actions through the real strip
+model and layout code, steps the windows with the app's spring, and paints every frame. They come out the same on
+any Mac and need no permissions. The recording script opens captioned TextEdit windows, drives them through `reelctl` while `screencapture` records the
 screen, and converts the recording with `scripts/mov-to-gif.swift`. Run it on an empty Space; the terminal needs the
 Screen Recording permission.
