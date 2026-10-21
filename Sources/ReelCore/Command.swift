@@ -79,6 +79,7 @@ public enum Command: Equatable, Hashable {
         }
         // A few friendly aliases for the CLI and URL scheme.
         switch name {
+        case "start": self = .start
         case "left": self = .focus(.left)
         case "right": self = .focus(.right)
         case "up": self = .focus(.up)

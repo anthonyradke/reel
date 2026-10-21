@@ -32,11 +32,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else if config.startOnLaunch {
             startWhenTrusted()
         }
+        // The login item can be switched off in System Settings too; the setting follows it.
+        if SMAppService.mainApp.status != .requiresApproval, config.launchAtLogin != LoginItem.isEnabled {
+            ConfigStore.shared.config.launchAtLogin = LoginItem.isEnabled
+        }
         UpdateChecker.shared.checkInBackground()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         wm.stop()
+        ConfigStore.shared.flush()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -149,8 +154,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.isReleasedWhenClosed = false
             w.center()
             w.setFrameAutosaveName("ReelSettings")
-            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
-                NSApp.setActivationPolicy(.accessory)
+            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
+                if self?.onboardingWindow?.isVisible != true { NSApp.setActivationPolicy(.accessory) }
             }
             settingsWindow = w
         }
@@ -162,11 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func showOnboarding() {
         if onboardingWindow == nil {
             let host = NSHostingController(rootView: OnboardingView(onFinish: { [weak self] in
-                ConfigStore.shared.config.hasCompletedOnboarding = true
                 self?.onboardingWindow?.close()
-                self?.onboardingWindow = nil
-                NSApp.setActivationPolicy(.accessory)
-                self?.startWhenTrusted()
             }).environmentObject(EngineState.shared))
             let w = NSWindow(contentViewController: host)
             w.title = "Welcome to Reel"
@@ -174,6 +175,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.titlebarAppearsTransparent = true
             w.isReleasedWhenClosed = false
             w.center()
+            // Finishing the tour and closing the window both count as done.
+            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                self.onboardingWindow = nil
+                if self.settingsWindow?.isVisible != true { NSApp.setActivationPolicy(.accessory) }
+                guard !ConfigStore.shared.config.hasCompletedOnboarding else { return }
+                ConfigStore.shared.config.hasCompletedOnboarding = true
+                if ConfigStore.shared.config.startOnLaunch { self.startWhenTrusted() }
+            }
             onboardingWindow = w
         }
         NSApp.setActivationPolicy(.regular)
@@ -184,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
 enum LoginItem {
     static func set(_ on: Bool) {
+        guard on != isEnabled else { return }
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
         } catch {

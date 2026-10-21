@@ -242,6 +242,10 @@ final class StripTests: XCTestCase {
             XCTAssertEqual(Command(name: c.name), c, c.name)
         }
         XCTAssertEqual(Command(name: "scroll:-120"), .scroll(-120))
+        // Everything the URL scheme and reelctl document has to parse.
+        for name in ["start", "stop", "toggle", "settings", "retile", "show-indicator", "send-to-next-display", "next-display"] {
+            XCTAssertNotNil(Command(name: name), name)
+        }
     }
 
     func testConfigDecodesOldFiles() throws {
@@ -260,5 +264,41 @@ final class StripTests: XCTestCase {
         let data = try JSONEncoder().encode(s)
         let back = try JSONDecoder().decode(Strip.self, from: data)
         XCTAssertEqual(back, s)
+    }
+
+    /// Whatever the strip looks like and wherever it's scrolled, no two windows on screen overlap,
+    /// none hangs onto a neighbouring display, and every visible window stays inside the display.
+    func testVisibleWindowsNeverOverlap() {
+        var rng = SystemRandomNumberGenerator()
+        let widths = [0.25, 1.0 / 3, 0.5, 2.0 / 3, 0.8, 1]
+        for _ in 0..<2000 {
+            var s = Strip()
+            let n = Int.random(in: 1...7, using: &rng)
+            var id: WindowID = 1
+            for _ in 0..<n {
+                s.insert(id, width: .proportion(widths.randomElement(using: &rng)!), at: .end, focus: true)
+                id += 1
+                if Bool.random(using: &rng), Int.random(in: 0...3, using: &rng) == 0 { _ = s.stackInto(.left) }
+            }
+            _ = s.focusColumn(Int.random(in: 0..<s.columns.count, using: &rng))
+            if s.columns.count > 2, Int.random(in: 0...2, using: &rng) == 0 { _ = s.togglePin(.left) }
+            if s.columns.count > 2, Int.random(in: 0...2, using: &rng) == 0 { _ = s.togglePin(.right) }
+            var c = ctx()
+            c.neighborLeft = Bool.random(using: &rng)
+            c.neighborRight = Bool.random(using: &rng)
+            let geo = StripGeometry(strip: s, context: c)
+            s.viewOffset = Double.random(in: -300...(geo.totalWidth + 300), using: &rng)
+            let r = Layout.compute(s, context: c)
+            let shown = r.placements.filter(\.visible).map(\.frame)
+            for (a, fa) in shown.enumerated() {
+                for fb in shown[(a + 1)...] {
+                    let i = fa.intersection(fb)
+                    XCTAssertTrue(i.isNull || i.width < 1 || i.height < 1, "overlap \(fa) \(fb) in \(s)")
+                }
+                if c.neighborLeft { XCTAssertGreaterThanOrEqual(fa.minX, -0.5, "hangs left: \(fa)") }
+                if c.neighborRight { XCTAssertLessThanOrEqual(fa.maxX, 1020.5, "hangs right: \(fa)") }
+                XCTAssertTrue(fa.maxX > 0 && fa.minX < 1020, "visible but off screen: \(fa)")
+            }
+        }
     }
 }

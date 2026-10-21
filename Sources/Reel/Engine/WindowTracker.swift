@@ -67,6 +67,7 @@ protocol WindowTrackerDelegate: AnyObject {
     func tracker(_ t: WindowTracker, minimizedChanged window: TrackedWindow, minimized: Bool)
     func tracker(_ t: WindowTracker, appHidden app: TrackedApp, hidden: Bool)
     func tracker(_ t: WindowTracker, titleChanged window: TrackedWindow)
+    func tracker(_ t: WindowTracker, sizeRefused window: TrackedWindow, asked: CGSize, actual: CGSize)
 }
 
 /// Watches every regular app through AXObservers and keeps a table of their windows.
@@ -105,25 +106,45 @@ final class WindowTracker {
 
     // MARK: - Apps
 
-    func watch(_ running: NSRunningApplication) {
+    func watch(_ running: NSRunningApplication, attempt: Int = 0) {
         let pid = running.processIdentifier
         guard pid != selfPID, apps[pid] == nil, running.activationPolicy == .regular, !running.isTerminated else { return }
         let app = TrackedApp(running)
-        apps[pid] = app
 
         var observer: AXObserver?
         guard AXObserverCreate(pid, axCallback, &observer) == .success, let observer else {
             Log.engine("could not observe \(app.name)")
             return
         }
-        app.observer = observer
         let refcon = Unmanaged.passUnretained(self).toOpaque()
-        for n in [kAXWindowCreatedNotification, kAXFocusedWindowChangedNotification,
-                  kAXApplicationHiddenNotification, kAXApplicationShownNotification] {
+        let err = AXObserverAddNotification(observer, app.element, kAXWindowCreatedNotification as CFString, refcon)
+        guard err == .success || err == .notificationAlreadyRegistered else {
+            // An app that's still launching doesn't answer yet. Try again shortly.
+            if attempt < 20 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25 + 0.1 * Double(attempt)) { [weak self] in
+                    self?.watch(running, attempt: attempt + 1)
+                }
+            } else if attempt == 20 {
+                Log.engine("gave up observing \(app.name) (\(err.rawValue))")
+            }
+            return
+        }
+        for n in [kAXFocusedWindowChangedNotification, kAXApplicationHiddenNotification, kAXApplicationShownNotification] {
             AXObserverAddNotification(observer, app.element, n as CFString, refcon)
         }
+        app.observer = observer
+        app.mover.onSizeRefused = { [weak self] id, asked, actual in
+            guard let self, let w = self.windows[id] else { return }
+            self.delegate?.tracker(self, sizeRefused: w, asked: asked, actual: actual)
+        }
+        apps[pid] = app
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
         scanWindows(of: app)
+        // Windows an app opens while it finishes launching can slip past the notification.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.apps[pid] === app else { return }
+            self.scanWindows(of: app)
+        }
     }
 
     private func unwatch(pid: pid_t, notify: Bool = true) {
@@ -266,17 +287,30 @@ private func axCallback(_ observer: AXObserver, _ element: AXUIElement, _ notifi
 final class WindowMover {
     private let queue: DispatchQueue
     private let lock = NSLock()
-    private var pending: [WindowID: (AXUIElement, AXUIElement, CGPoint, CGSize?)] = [:]
+    private struct Move {
+        var window: AXUIElement
+        var app: AXUIElement
+        var origin: CGPoint
+        var size: CGSize?
+        /// Where to stand while resizing. macOS won't let a resize push a window past the edge
+        /// of its display, so a window growing near the edge has to be resized somewhere it fits.
+        var resizeAt: CGPoint?
+    }
+    private var pending: [WindowID: Move] = [:]
     private var scheduled = false
+    /// Called on the main thread when a window ends up wider than we asked: the app has a
+    /// minimum width. Gets the window, the size asked for and the size it actually took.
+    var onSizeRefused: ((WindowID, CGSize, CGSize) -> Void)?
 
     init(name: String) {
         queue = DispatchQueue(label: "reel.mover.\(name)", qos: .userInteractive)
     }
 
-    func set(_ window: AXUIElement, app: AXUIElement, id: WindowID, origin: CGPoint, size: CGSize?) {
+    func set(_ window: AXUIElement, app: AXUIElement, id: WindowID, origin: CGPoint, size: CGSize?, resizeAt: CGPoint? = nil) {
         lock.lock()
-        let prevSize = pending[id]?.3
-        pending[id] = (window, app, origin, size ?? prevSize)
+        let prev = pending[id]
+        pending[id] = Move(window: window, app: app, origin: origin, size: size ?? prev?.size,
+                           resizeAt: size != nil ? resizeAt : prev?.resizeAt)
         let needsSchedule = !scheduled
         scheduled = true
         lock.unlock()
@@ -290,14 +324,19 @@ final class WindowMover {
             pending.removeAll()
             if work.isEmpty { scheduled = false; lock.unlock(); return }
             lock.unlock()
-            for (_, item) in work {
-                let (el, app, origin, size) = item
-                AX.withoutEnhancedUI(app) {
-                    if let size {
+            guard let app = work.first?.value.app else { continue }
+            AX.withoutEnhancedUI(app) {
+                for (id, item) in work {
+                    let el = item.window, origin = item.origin
+                    if let size = item.size {
                         // Position, size, position: some apps clamp the size against the old
                         // position, and some move themselves when resized.
-                        AX.setPosition(el, origin)
+                        AX.setPosition(el, item.resizeAt ?? origin)
                         AX.setSize(el, size)
+                        if let actual = AX.size(el), actual.width > size.width + 4 {
+                            let report = onSizeRefused
+                            DispatchQueue.main.async { report?(id, size, actual) }
+                        }
                     }
                     AX.setPosition(el, origin)
                 }

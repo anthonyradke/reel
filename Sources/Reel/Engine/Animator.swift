@@ -95,12 +95,20 @@ final class Animator {
         return e.current
     }
 
+    /// Whether the window is meant to be on screen (false when scrolled away or parked).
     func isVisible(_ id: WindowID) -> Bool {
-        entries[id].map { $0.visible || !$0.parked } ?? false
+        entries[id]?.visible ?? false
     }
 
     func forget(_ id: WindowID) {
         entries[id] = nil
+    }
+
+    /// Forgets what was last sent, so the next layout sends the frame again even if the
+    /// target hasn't changed (the app moved the window behind our back).
+    func invalidate(_ id: WindowID) {
+        entries[id]?.lastSentOrigin = nil
+        entries[id]?.lastSentSize = nil
     }
 
     func freeze(_ id: WindowID) { entries[id]?.frozen = true }
@@ -205,10 +213,14 @@ final class Animator {
         let size = e.target.size
         guard e.lastSentSize.map({ abs($0.width - size.width) > 0.5 || abs($0.height - size.height) > 0.5 }) ?? true else { return }
         e.lastSentSize = size
-        let origin = e.lastSentOrigin ?? e.target.origin
+        // Resize where the window is now (the move toward the target follows on the spring),
+        // but somewhere the new size fits on the display, or macOS cuts it short.
+        let origin = e.lastSentOrigin ?? CGPoint(x: e.x.value.rounded(), y: e.y.value.rounded())
+        let d = e.display.frame
+        let resizeAt = CGPoint(x: min(max(origin.x, d.minX), max(d.minX, d.maxX - size.width)), y: e.target.minY)
         e.window.lastCommanded = CGRect(origin: e.target.origin, size: size)
         e.window.lastCommandedAt = CACurrentMediaTime()
-        e.window.app.mover.set(e.window.element, app: e.window.app.element, id: e.id, origin: origin, size: size)
+        e.window.app.mover.set(e.window.element, app: e.window.app.element, id: e.id, origin: origin, size: size, resizeAt: resizeAt)
     }
 
     private func send(_ e: Entry, origin: CGPoint) {

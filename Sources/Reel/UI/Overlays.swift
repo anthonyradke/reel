@@ -52,6 +52,19 @@ final class OverlayController {
         indicators.values.forEach { $0.orderOut(nil) }
     }
 
+    /// Drops dimming and tab bars for strips that aren't on screen (another Space, or a display
+    /// Reel no longer manages). The panels join every Space, so they'd show up there otherwise.
+    func retain(only keys: Set<StripKey>) {
+        for (k, panels) in dims where !keys.contains(k) {
+            panels.values.forEach { $0.orderOut(nil) }
+            dims[k] = nil
+        }
+        for (k, bars) in tabBars where !keys.contains(k) {
+            bars.forEach { $0.orderOut(nil) }
+            tabBars[k] = nil
+        }
+    }
+
     // MARK: - Layout updates
 
     func update(key: StripKey, result: LayoutResult, strip: Strip, display: Display, isFocusedStrip: Bool) {

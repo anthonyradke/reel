@@ -45,10 +45,21 @@ enum SessionStore {
 /// the same order with the same widths and stacks.
 final class SessionRestorer {
     private var saved: [SavedStrip]
+    private var floating: [WindowSignature]
     private var claimed: Set<WindowID> = []
 
     init(_ session: SavedSession) {
         saved = session.strips
+        floating = session.floating
+    }
+
+    /// Whether the user had floated this window before the restart.
+    func wasFloating(id: WindowID, bundleID: String?, title: String) -> Bool {
+        let i = floating.firstIndex { $0.id == id && $0.bundleID == bundleID }
+            ?? floating.firstIndex { $0.bundleID == bundleID && !title.isEmpty && $0.title == title }
+        guard let i else { return false }
+        floating.remove(at: i)
+        return true
     }
 
     struct Match {

@@ -29,7 +29,7 @@ final class WindowManager: WindowTrackerDelegate {
     private var activeTab: [WindowID: WindowID] = [:]
     /// Windows that left the strip because their app was hidden or they were minimised, with
     /// where they were, so they come back to the same place.
-    private var parkedForHide: [WindowID: (key: StripKey, index: Int)] = [:]
+    private var parkedForHide: [WindowID: (key: StripKey, index: Int, width: ColumnWidth)] = [:]
 
     private var restorer: SessionRestorer?
     private var restoreMatches: [(window: WindowID, match: SessionRestorer.Match)] = []
@@ -43,6 +43,9 @@ final class WindowManager: WindowTrackerDelegate {
     private var saveWork: DispatchWorkItem?
     private var lastFocusedWindow: WindowID?
     private var gesture: GestureState?
+    /// Times the heal pass put a window back at a given target, so it gives up on windows that won't stay.
+    private var healAttempts: [WindowID: (target: CGRect, tries: Int)] = [:]
+    private var wakeWork: DispatchWorkItem?
 
     var onStateChange: (() -> Void)?
 
@@ -76,6 +79,7 @@ final class WindowManager: WindowTrackerDelegate {
         }
         running = true
         Log.engine("engine starting")
+        AX.setGlobalTimeout(0.5)
         refreshDisplays()
         if config.restoreSession, let s = SessionStore.load() {
             restorer = SessionRestorer(s)
@@ -84,6 +88,11 @@ final class WindowManager: WindowTrackerDelegate {
         tracker.start()
         bulkAdding = false
         finishBulkAdd()
+        // Saved scroll positions were for the old widths; aim each strip at its focus again.
+        for k in Array(strips.keys) {
+            strips[k]?.sanitize()
+            ensureFocusedVisible(k, previous: nil)
+        }
         installMonitors()
         HotkeyManager.shared.enable(bindings: config.bindings)
         GestureMonitor.shared.start()
@@ -368,6 +377,7 @@ final class WindowManager: WindowTrackerDelegate {
         pendingBulk.removeAll()
         var unmatched: [TrackedWindow] = []
         for w in sorted {
+            if restorer?.wasFloating(id: w.id, bundleID: w.app.bundleID, title: w.title) == true { userFloated.insert(w.id) }
             guard shouldTile(w) else { floating.insert(w.id); continue }
             if let r = restorer, let m = r.match(id: w.id, bundleID: w.app.bundleID, title: w.title) {
                 restoreMatches.append((w.id, m))
@@ -411,10 +421,11 @@ final class WindowManager: WindowTrackerDelegate {
         // A window from an app in the background slots in without taking focus.
         let focus = !initial && frontmost
         let r = rule(for: w)
-        let width = r?.width.map { ColumnWidth.proportion($0) } ?? .proportion(config.defaultWidth)
+        var width = r?.width.map { ColumnWidth.proportion($0) } ?? .proportion(config.defaultWidth)
         var position: Strip.InsertPosition = config.newWindowPlacement == .endOfStrip || initial ? .end : .rightOfFocused
         if let back = parkedForHide.removeValue(forKey: w.id), back.key == k {
             position = .index(back.index)
+            width = back.width
         } else if let r, r.action == .slot {
             position = r.slot <= 0 ? .end : .index(r.slot - 1)
         }
@@ -522,12 +533,18 @@ final class WindowManager: WindowTrackerDelegate {
             }
             return
         }
-        // An app that won't go as narrow as asked keeps its width; space the strip around it.
-        guard let asked = w.lastCommanded, let f = w.frame, CACurrentMediaTime() - w.lastCommandedAt < 2 else { return }
-        if f.width > asked.width + 4 && (w.minWidth ?? 0) + 2 < f.width {
-            w.minWidth = f.width
-            Log.engine("\(w.app.name) keeps a minimum width of \(Int(f.width))")
-            if let k = key(containing: w.group) { layout(k, animated: true) }
+    }
+
+    func tracker(_ t: WindowTracker, sizeRefused w: TrackedWindow, asked: CGSize, actual: CGSize) {
+        // Only trust the report if that's still the size we want; a later command may have
+        // changed it while this one was in flight.
+        guard running, let want = w.lastCommanded, abs(want.width - asked.width) < 1 else { return }
+        guard (w.minWidth ?? 0) + 2 < actual.width else { return }
+        w.minWidth = actual.width
+        Log.engine("\(w.app.name) \(w.id) keeps a minimum width of \(Int(actual.width)) (asked for \(Int(asked.width)))")
+        if let k = key(containing: w.group) {
+            ensureFocusedVisible(k, previous: nil)
+            layout(k, animated: true)
         }
     }
 
@@ -535,7 +552,7 @@ final class WindowManager: WindowTrackerDelegate {
         guard running else { return }
         if minimized {
             if let k = key(containing: w.group), case .strip(let c, _)? = strips[k]?.locate(w.group) {
-                parkedForHide[w.group] = (k, c)
+                parkedForHide[w.group] = (k, c, strips[k]!.columns[c].width)
                 strips[k]?.remove(w.group)
                 ensureFocusedVisible(k, previous: nil)
                 layout(k, animated: true)
@@ -549,12 +566,18 @@ final class WindowManager: WindowTrackerDelegate {
         guard running else { return }
         let wins = tracker.windows.values.filter { $0.app.pid == app.pid }
         if hidden {
-            var touched: Set<StripKey> = []
+            // Note every window's place before taking any out, or the later ones shift.
+            var spots: [(id: WindowID, key: StripKey, column: Int, width: ColumnWidth)] = []
             for w in wins {
-                guard let k = key(containing: w.group), case .strip(let c, _)? = strips[k]?.locate(w.group) else { continue }
-                parkedForHide[w.group] = (k, c)
-                strips[k]?.remove(w.group)
-                touched.insert(k)
+                guard let k = key(containing: w.group), case .strip(let c, _)? = strips[k]?.locate(w.group),
+                      !spots.contains(where: { $0.id == w.group }) else { continue }
+                spots.append((w.group, k, c, strips[k]!.columns[c].width))
+            }
+            var touched: Set<StripKey> = []
+            for spot in spots {
+                parkedForHide[spot.id] = (spot.key, spot.column, spot.width)
+                strips[spot.key]?.remove(spot.id)
+                touched.insert(spot.key)
             }
             for k in touched {
                 ensureFocusedVisible(k, previous: nil)
@@ -605,14 +628,14 @@ final class WindowManager: WindowTrackerDelegate {
         })
         for n in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             systemObservers.append(nc.addObserver(forName: n, object: nil, queue: main) { [weak self] _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { self?.recoverAfterWake() }
+                self?.scheduleWakeRecovery(after: 1.0)
             })
         }
         systemObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: main) { [weak self] _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.screensChanged() }
         })
         systemObservers.append(DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: main) { [weak self] _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.recoverAfterWake() }
+            self?.scheduleWakeRecovery(after: 0.8)
         })
     }
 
@@ -625,6 +648,14 @@ final class WindowManager: WindowTrackerDelegate {
             DistributedNotificationCenter.default().removeObserver($0)
         }
         systemObservers.removeAll()
+    }
+
+    /// Wake, screen wake, session switch and unlock tend to arrive together; recover once.
+    private func scheduleWakeRecovery(after delay: TimeInterval) {
+        wakeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.recoverAfterWake() }
+        wakeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func recoverAfterWake() {
@@ -651,6 +682,7 @@ final class WindowManager: WindowTrackerDelegate {
                 _ = strips[k]?.setWidth(.proportion(min(1, max(0.1, p))))
                 w.minWidth = nil
             }
+            ensureFocusedVisible(k, previous: nil)
             layout(k, animated: true)
             scheduleSave()
             return
@@ -719,17 +751,39 @@ final class WindowManager: WindowTrackerDelegate {
         tracker.pruneDeadWindows()
         // Re-apply frames to windows an app moved behind our back (outside of any animation).
         guard drag == nil, gesture == nil, !animator.isRunning, NSEvent.pressedMouseButtons == 0 else { return }
+        let now = CACurrentMediaTime()
         for k in activeKeys.values {
             guard let strip = strips[k], let d = display(for: k) else { continue }
             let result = Layout.compute(strip, context: context(for: k, display: d))
             var drifted = false
             for p in result.placements where p.visible {
-                guard let w = tracker.windows[visibleMember(of: p.id)], let f = w.frame else { continue }
-                if abs(f.minX - p.frame.minX) > 6 || abs(f.minY - p.frame.minY) > 6 {
-                    if CACurrentMediaTime() - w.lastCommandedAt > 1.5 { drifted = true }
+                let id = visibleMember(of: p.id)
+                guard let w = tracker.windows[id], let f = w.frame, now - w.lastCommandedAt > 1.5 else { continue }
+                let target = p.frame.integral
+                if w.minWidth == nil, f.width > target.width + 4, abs(f.minX - target.minX) <= 6 {
+                    // The app widened itself after the fact: that's its minimum width.
+                    w.minWidth = f.width
+                    drifted = true
+                    Log.engine("\(w.app.name) \(id) widened itself to \(Int(f.width)) (wanted \(Int(target.width)))")
+                    continue
                 }
+                let moved = abs(f.minX - target.minX) > 6 || abs(f.minY - target.minY) > 6
+                let resized = !p.keepsHeight && (abs(f.height - target.height) > 6 ||
+                    (w.minWidth == nil && abs(f.width - target.width) > 6))
+                guard moved || resized else { healAttempts[id] = nil; continue }
+                // Some windows can't go where we ask (an app pins its own size or position).
+                // Try a few times, then leave them be until something changes.
+                let tries = healAttempts[id].flatMap { $0.target == target ? $0.tries : nil } ?? 0
+                guard tries < 3 else { continue }
+                healAttempts[id] = (target, tries + 1)
+                animator.invalidate(id)
+                drifted = true
+                Log.engine("\(w.app.name) \(id) drifted to \(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height)); putting it back")
             }
-            if drifted { layout(k, animated: true) }
+            if drifted {
+                ensureFocusedVisible(k, previous: nil)
+                layout(k, animated: true)
+            }
         }
     }
 
@@ -768,12 +822,15 @@ final class WindowManager: WindowTrackerDelegate {
     }
 
     func layoutAll(animated: Bool) {
-        for k in activeKeys.values { layout(k, animated: animated) }
+        let shown = Set(activeKeys.filter { isManaged(display: $0.key) }.values)
+        overlays.retain(only: shown)
+        for k in shown { layout(k, animated: animated) }
     }
 
     func layout(_ key: StripKey, animated: Bool) {
-        guard running, let strip = strips[key], let d = display(for: key), activeKeys[d.uuid] == key,
-              isManaged(display: d.uuid) else { return }
+        // A Space with nothing tiled still gets laid out, so overlays from elsewhere go away.
+        guard running, let d = display(for: key), activeKeys[d.uuid] == key, isManaged(display: d.uuid) else { return }
+        let strip = strips[key] ?? Strip()
         let ctx = context(for: key, display: d)
         let result = Layout.compute(strip, context: ctx)
         let animate = animated && config.animate
@@ -792,7 +849,9 @@ final class WindowManager: WindowTrackerDelegate {
             }
         }
         overlays.update(key: key, result: result, strip: strip, display: d, isFocusedStrip: key == focusedKey)
-        overlays.updateFocus(strip.focusedWindow.flatMap { id in result.placements.first { $0.id == id && $0.visible }?.frame })
+        if key == focusedKey {
+            overlays.updateFocus(strip.focusedWindow.flatMap { id in result.placements.first { $0.id == id && $0.visible }?.frame })
+        }
         onStateChange?()
     }
 
@@ -890,7 +949,14 @@ final class WindowManager: WindowTrackerDelegate {
                 scroll = false
             }
         case .scroll(let dx):
-            strip.viewOffset += dx
+            let next = strip.viewOffset + dx
+            if config.centerMode == .always, let first = geo.widths.first, let last = geo.widths.last {
+                // Centred strips can scroll until the first or last column sits in the middle.
+                let v = geo.viewportWidth
+                strip.viewOffset = min(max(next, first / 2 - v / 2), geo.totalWidth - last / 2 - v / 2)
+            } else {
+                strip.viewOffset = geo.clampOffset(next)
+            }
             changed = true
             scroll = false
         case .showIndicator:
@@ -1100,21 +1166,36 @@ final class WindowManager: WindowTrackerDelegate {
                     "index": i + 1,
                     "focused": i == s.focused && s.focusedPin == nil,
                     "tabbed": c.tabbed,
-                    "windows": c.windows.map { id -> [String: Any] in
-                        let w = window(id)
-                        return ["id": id, "app": w?.app.name ?? "", "title": w?.title ?? ""]
-                    },
+                    "windows": c.windows.map { describe($0) },
                 ]
             }
             list.append([
                 "display": d.name, "uuid": d.uuid, "space": k.space, "managed": isManaged(display: d.uuid),
                 "columns": cols,
-                "pinnedLeft": s.pinned[.left]?.windows ?? [], "pinnedRight": s.pinned[.right]?.windows ?? [],
+                "pinnedLeft": (s.pinned[.left]?.windows ?? []).map { describe($0) },
+                "pinnedRight": (s.pinned[.right]?.windows ?? []).map { describe($0) },
+                "viewOffset": s.viewOffset,
+                "frame": [Int(d.frame.minX), Int(d.frame.minY), Int(d.frame.width), Int(d.frame.height)],
+                "area": { let a = d.usableArea(respectDock: config.respectDock); return [Int(a.minX), Int(a.minY), Int(a.width), Int(a.height)] }(),
+                "focusedStrip": k == focusedKey,
             ])
         }
         out["displays"] = list
-        out["floating"] = Array(floating)
+        out["floating"] = floating.sorted().map { describe($0) }
         return out
+    }
+
+    private func describe(_ id: WindowID) -> [String: Any] {
+        let w = window(id)
+        var d: [String: Any] = ["id": id, "app": w?.app.name ?? "", "title": w?.title ?? ""]
+        func rect(_ r: CGRect) -> [Int] { [Int(r.minX), Int(r.minY), Int(r.width), Int(r.height)] }
+        if let f = w?.frame { d["frame"] = rect(f) }
+        if let w, let t = animator.targetFrame(of: w.id) {
+            d["target"] = rect(t)
+            d["onScreen"] = animator.isVisible(w.id)
+        }
+        if let m = w?.minWidth { d["minWidth"] = Int(m) }
+        return d
     }
 
     private func scheduleSave() {

@@ -19,7 +19,7 @@ final class ConfigStore: ObservableObject {
     @Published var config: Config {
         didSet {
             guard config != oldValue else { return }
-            if !loadingFromDisk { save() }
+            if !loadingFromDisk { scheduleSave() }
             onChange?(config, oldValue)
         }
     }
@@ -39,7 +39,25 @@ final class ConfigStore: ObservableObject {
         watch()
     }
 
+    private var saveWork: DispatchWorkItem?
+
+    /// Sliders change the config many times a second; write the file once they settle.
+    private func scheduleSave() {
+        saveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.save() }
+        saveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// Writes any change still waiting, e.g. when the app quits.
+    func flush() {
+        guard let work = saveWork, !work.isCancelled else { return }
+        work.cancel()
+        save()
+    }
+
     private func save() {
+        saveWork = nil
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? enc.encode(config) else { return }

@@ -33,8 +33,9 @@ final class IndicatorPanel: OverlayPanel {
 
     func update(key: StripKey, strip: Strip, result: LayoutResult, display: Display) {
         view.key = key
-        view.load(strip: strip, result: result)
-        let size = view.preferredSize(maxWidth: display.frame.width - 80)
+        let maxWidth = display.frame.width - 80
+        view.load(strip: strip, result: result, maxWidth: maxWidth)
+        let size = view.preferredSize(maxWidth: maxWidth)
         let area = display.visibleFrame
         let frame = CGRect(x: area.midX - size.width / 2, y: area.maxY - size.height - 18, width: size.width, height: size.height)
         setFrame(Displays.toAppKit(frame), display: true)
@@ -65,7 +66,8 @@ final class IndicatorView: NSView {
     private var tiles: [Tile] = []
     private var pinnedTiles: [Tile] = []
     private var viewport: ClosedRange<Double> = 0...1
-    private var totalWidth: Double = 1
+    /// Tiles shrink when a long strip wouldn't fit across the screen.
+    private var scale: CGFloat = 1
     fileprivate var dragFrom: Int?
     private var dragX: CGFloat = 0
     private var hoverDrop: Int?
@@ -76,7 +78,9 @@ final class IndicatorView: NSView {
         var focused: Bool
         var share: Double
         var rect: NSRect = .zero
-        var visible: Bool
+        /// Where the column sits on the strip, in points, to tell which tiles are on screen.
+        var start: Double = 0
+        var width: Double = 0
     }
 
     private let tileH: CGFloat = 44
@@ -85,20 +89,32 @@ final class IndicatorView: NSView {
 
     override var isFlipped: Bool { true }
 
-    func load(strip: Strip, result: LayoutResult) {
+    func load(strip: Strip, result: LayoutResult, maxWidth: CGFloat) {
         guard let geo = result.geometry else { return }
-        totalWidth = max(1, geo.totalWidth)
         viewport = strip.viewOffset...(strip.viewOffset + geo.viewportWidth)
         tiles = strip.columns.enumerated().map { i, col in
             Tile(windows: col.windows, icons: icons(col.windows), focused: strip.focusedPin == nil && i == strip.focused,
-                 share: geo.widths[i] / geo.viewportWidth, visible: result.columnFrames.indices.contains(i))
+                 share: geo.widths[i] / geo.viewportWidth, start: geo.starts[i], width: geo.widths[i])
         }
         pinnedTiles = PinSide.allCases.compactMap { side in
             strip.pinned[side].map { col in
-                Tile(windows: col.windows, icons: icons(col.windows), focused: strip.focusedPin == side, share: 0.33, visible: true)
+                Tile(windows: col.windows, icons: icons(col.windows), focused: strip.focusedPin == side, share: 0.33)
             }
         }
+        scale = 1
+        let natural = contentWidth()
+        if natural > maxWidth { scale = max(0.3, (maxWidth - (natural - tilesWidth())) / tilesWidth()) }
         layoutTiles()
+    }
+
+    private func tilesWidth() -> CGFloat {
+        (tiles + pinnedTiles).reduce(0) { $0 + tileWidth($1) }
+    }
+
+    private func contentWidth() -> CGFloat {
+        let all = tiles + pinnedTiles
+        if all.isEmpty { return 160 }
+        return pad * 2 + tilesWidth() + spacing * CGFloat(all.count - 1) + (pinnedTiles.isEmpty ? 0 : 14)
     }
 
     private func icons(_ ids: [WindowID]) -> [NSImage] {
@@ -107,15 +123,11 @@ final class IndicatorView: NSView {
 
     private func tileWidth(_ t: Tile) -> CGFloat {
         // Wider columns get wider tiles, within reason.
-        max(40, min(140, CGFloat(t.share) * 110))
+        max(40, min(140, CGFloat(t.share) * 110)) * scale
     }
 
     func preferredSize(maxWidth: CGFloat) -> CGSize {
-        let all = tiles + pinnedTiles
-        var w = pad * 2 + all.reduce(0) { $0 + tileWidth($1) } + spacing * CGFloat(max(0, all.count - 1))
-        if !pinnedTiles.isEmpty { w += 14 }
-        if all.isEmpty { w = 160 }
-        return CGSize(width: min(maxWidth, w), height: tileH + pad * 2 + 6)
+        CGSize(width: min(maxWidth, contentWidth()), height: tileH + pad * 2)
     }
 
     private func layoutTiles() {
@@ -167,17 +179,8 @@ final class IndicatorView: NSView {
     }
 
     private func overlapsViewport(_ i: Int) -> Bool {
-        guard let geoStart = startOf(i) else { return false }
-        let end = geoStart + tiles[i].share * (viewport.upperBound - viewport.lowerBound)
-        return end > viewport.lowerBound + 1 && geoStart < viewport.upperBound - 1
-    }
-
-    private func startOf(_ i: Int) -> Double? {
-        guard tiles.indices.contains(i) else { return nil }
-        let vw = viewport.upperBound - viewport.lowerBound
-        var s = 0.0
-        for j in 0..<i { s += tiles[j].share * vw + ConfigStore.shared.config.gap }
-        return s
+        let t = tiles[i]
+        return t.start + t.width > viewport.lowerBound + 1 && t.start < viewport.upperBound - 1
     }
 
     private func drawTile(_ t: Tile, in r: NSRect, dimmed: Bool, pinned: Bool = false) {
@@ -191,7 +194,7 @@ final class IndicatorView: NSView {
         }
         let icons = t.icons.isEmpty ? [NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil)!] : t.icons
         let n = min(icons.count, 3)
-        let size: CGFloat = n == 1 ? 28 : 20
+        let size: CGFloat = max(10, min(n == 1 ? 28 : 20, r.width - 8))
         let totalH = size * CGFloat(n) * (n == 1 ? 1 : 0.62) + (n == 1 ? 0 : size * 0.38)
         var y = r.midY - totalH / 2
         for icon in icons.prefix(3) {

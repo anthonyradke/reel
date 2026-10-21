@@ -10,6 +10,12 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePo
 enum AX {
     static var isTrusted: Bool { AXIsProcessTrusted() }
 
+    /// Caps how long any Accessibility call may wait on an app. The default is six seconds,
+    /// which a hung app would turn into a frozen window manager.
+    static func setGlobalTimeout(_ seconds: Float) {
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), seconds)
+    }
+
     static func promptForTrust() {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         AXIsProcessTrustedWithOptions([key: true] as CFDictionary)

@@ -194,23 +194,36 @@ public enum Layout {
         var result = LayoutResult()
         result.geometry = geo
 
+        // Edges nothing may hang over: a neighbouring display, or a pinned column.
+        let hasLeftPin = strip.pinned[.left] != nil, hasRightPin = strip.pinned[.right] != nil
+        let leftEdge: Double? = hasLeftPin ? geo.viewportMinX : (ctx.neighborLeft ? Double(display.minX) : nil)
+        let leftSnap = hasLeftPin ? geo.viewportMinX : Double(inner.minX)
+        let viewportMaxX = geo.viewportMinX + geo.viewportWidth
+        let rightEdge: Double? = hasRightPin ? viewportMaxX : (ctx.neighborRight ? Double(display.maxX) : nil)
+        let rightSnap = hasRightPin ? viewportMaxX : Double(inner.maxX)
+        let raw = strip.columns.indices.map { geo.viewportMinX + geo.starts[$0] - offset }
+        let gap = ctx.config.gap
+        var previousRight = -Double.infinity
+
         for (i, col) in strip.columns.enumerated() {
-            var x = geo.viewportMinX + geo.starts[i] - offset
+            var x = raw[i]
             let w = geo.widths[i]
             var visible = x + w > Double(display.minX) && x < Double(display.maxX)
             var side: PinSide? = nil
             if x + w <= Double(display.minX) { side = .left }
             if x >= Double(display.maxX) { side = .right }
 
-            // Never hang over a neighbouring display: snap flush or hide.
-            if visible, ctx.neighborRight, x + w > Double(display.maxX) {
-                let shown = Double(display.maxX) - x
-                if shown >= w / 2 { x = Double(inner.maxX) - w } else { visible = false; side = .right }
+            // A column crossing one of those edges snaps flush against it when most of it is
+            // showing and there's room, and hides otherwise. It never overlaps its neighbours.
+            if visible, let edge = rightEdge, x + w > edge + 0.5 {
+                let snapped = rightSnap - w
+                if edge - x >= w / 2 && snapped >= previousRight + gap - 0.5 { x = snapped } else { visible = false; side = .right }
             }
-            if visible, ctx.neighborLeft, x < Double(display.minX) {
-                let shown = x + w - Double(display.minX)
-                if shown >= w / 2 { x = Double(inner.minX) } else { visible = false; side = .left }
+            if visible, let edge = leftEdge, x < edge - 0.5 {
+                let next = i + 1 < raw.count ? raw[i + 1] : Double.infinity
+                if x + w - edge >= w / 2 && leftSnap + w + gap <= next + 0.5 { x = leftSnap } else { visible = false; side = .left }
             }
+            if visible { previousRight = x + w }
 
             let colRect = CGRect(x: x, y: Double(inner.minY), width: w, height: Double(inner.height))
             result.columnFrames.append(colRect)
