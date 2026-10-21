@@ -27,6 +27,8 @@ final class Animator {
             self.window = window
             x = Spring(Double(frame.minX), omega: omega)
             y = Spring(Double(frame.minY), omega: omega)
+            x.minSpeed = 90
+            y.minSpeed = 90
             target = frame
             visible = true
             hiddenSide = .right

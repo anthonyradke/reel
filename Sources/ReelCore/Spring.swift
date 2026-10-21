@@ -8,6 +8,10 @@ public struct Spring: Equatable {
     public var target: Double
     /// Angular frequency. About 20 settles in roughly a quarter of a second.
     public var omega: Double
+    /// Slowest it may approach the target, in units per second. A spring eases out forever, and
+    /// windows only move in whole points, so without a floor the last second is a crawl of
+    /// one-point steps with frames in between where nothing moves.
+    public var minSpeed: Double = 0
 
     public init(_ value: Double, omega: Double = 22) {
         self.value = value
@@ -27,6 +31,15 @@ public struct Spring: Equatable {
         let a = (velocity + omega * d) * dt
         value = target + (d + a) * e
         velocity = (velocity - (velocity + omega * d) * omega * dt) * e
+        let floor = minSpeed * dt
+        if floor > 0, abs(value - target) < abs(d), abs(d) - abs(value - target) < floor {
+            // Heading in but slower than the floor: keep moving at the floor until it arrives.
+            if abs(d) <= floor {
+                snap()
+                return false
+            }
+            value = target + (d > 0 ? d - floor : d + floor)
+        }
         if abs(value - target) < 0.25 && abs(velocity) < 2 {
             snap()
             return false

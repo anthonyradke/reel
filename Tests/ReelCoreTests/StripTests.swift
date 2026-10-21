@@ -251,6 +251,24 @@ final class StripTests: XCTestCase {
         XCTAssertLessThan(t, 1)
     }
 
+    func testSpringMinSpeedKeepsMovingToTheEnd() {
+        var plain = Spring(900, omega: 10)
+        plain.target = 0
+        var floored = plain
+        floored.minSpeed = 90
+        var plainFrames = 0
+        while plain.step(1.0 / 60) { plainFrames += 1 }
+        var frames = 0, last = floored.value.rounded()
+        while floored.step(1.0 / 60) {
+            frames += 1
+            // Every frame moves the window by at least a point until it arrives.
+            XCTAssertNotEqual(floored.value.rounded(), last, "stalled at frame \(frames)")
+            last = floored.value.rounded()
+        }
+        XCTAssertEqual(floored.value, 0)
+        XCTAssertLessThan(frames, plainFrames)
+    }
+
     func testCommandNamesRoundTrip() {
         for c in Command.all {
             XCTAssertEqual(Command(name: c.name), c, c.name)

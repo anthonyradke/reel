@@ -318,6 +318,7 @@ final class SwipeProxy: NSObject {
         guard state == .tracking else { done(); return }
         state = .settling
         spring = Spring(offset, omega: omega)
+        spring.minSpeed = 90
         spring.velocity = velocity
         spring.target = target
         if !animated { spring.snap() }
