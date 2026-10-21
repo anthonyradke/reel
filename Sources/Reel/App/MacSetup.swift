@@ -12,7 +12,7 @@ struct MacSetupCheck: Identifiable {
 }
 
 enum MacSetup {
-    static func run(swipeFingers: Int) -> [MacSetupCheck] {
+    static func run(swipeFingers: Int, smoothSwipe: Bool) -> [MacSetupCheck] {
         var out: [MacSetupCheck] = []
 
         out.append(MacSetupCheck(
@@ -21,6 +21,16 @@ enum MacSetup {
                 "Needed to move windows. Turn Reel on in Privacy & Security › Accessibility.",
             status: AX.isTrusted ? .ok : .problem,
             settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"))
+
+        if swipeFingers > 0 && smoothSwipe && SwipeProxy.isSupported {
+            let granted = SwipeProxy.hasPermission
+            out.append(MacSetupCheck(
+                id: "screen", title: "Screen Recording permission",
+                detail: granted ? "Granted. Swipes move pictures of the windows, so they stay in step." :
+                    "Optional, for smooth swipes. Turn Reel on in Privacy & Security › Screen & System Audio Recording, then quit and reopen Reel.",
+                status: granted ? .ok : .warning,
+                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"))
+        }
 
         let tp = UserDefaults(suiteName: "com.apple.AppleMultitouchTrackpad")
         let tpBT = UserDefaults(suiteName: "com.apple.driver.AppleBluetoothMultitouch.trackpad")

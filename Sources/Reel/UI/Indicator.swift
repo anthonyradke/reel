@@ -154,10 +154,11 @@ final class IndicatorView: NSView {
             s.draw(at: NSPoint(x: bounds.midX - s.size().width / 2, y: bounds.midY - s.size().height / 2))
             return
         }
-        // The bracket under the tiles that are on screen right now.
-        if let first = tiles.indices.first(where: { overlapsViewport($0) }),
-           let last = tiles.indices.last(where: { overlapsViewport($0) }) {
-            let r = NSRect(x: tiles[first].rect.minX - 3, y: pad - 3, width: tiles[last].rect.maxX - tiles[first].rect.minX + 6, height: tileH + 6)
+        // The bracket marks the part of the strip that's on screen. It follows the scroll
+        // position continuously, so it slides the same way in both directions instead of
+        // jumping a whole tile the moment one pixel of a column comes into view.
+        if let lo = indicatorX(forStripX: viewport.lowerBound), let hi = indicatorX(forStripX: viewport.upperBound), hi > lo {
+            let r = NSRect(x: lo - 3, y: pad - 3, width: hi - lo + 6, height: tileH + 6)
             NSColor.labelColor.withAlphaComponent(0.08).setFill()
             NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10).fill()
         }
@@ -179,9 +180,22 @@ final class IndicatorView: NSView {
         }
     }
 
-    private func overlapsViewport(_ i: Int) -> Bool {
-        let t = tiles[i]
-        return t.start + t.width > viewport.lowerBound + 1 && t.start < viewport.upperBound - 1
+    /// Maps a point on the strip to the indicator: inside a column it lands proportionally
+    /// inside that column's tile, in a gap it lands proportionally in the spacing.
+    private func indicatorX(forStripX x: Double) -> CGFloat? {
+        guard let first = tiles.first, let last = tiles.last else { return nil }
+        if x <= first.start { return first.rect.minX }
+        for (i, t) in tiles.enumerated() {
+            if x <= t.start + t.width {
+                return t.rect.minX + CGFloat((x - t.start) / max(t.width, 1)) * t.rect.width
+            }
+            if i + 1 < tiles.count, x < tiles[i + 1].start {
+                let next = tiles[i + 1]
+                let f = CGFloat((x - t.start - t.width) / max(next.start - t.start - t.width, 1))
+                return t.rect.maxX + f * (next.rect.minX - t.rect.maxX)
+            }
+        }
+        return last.rect.maxX
     }
 
     private func drawTile(_ t: Tile, in r: NSRect, dimmed: Bool, pinned: Bool = false) {

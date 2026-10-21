@@ -303,6 +303,7 @@ struct InputPage: View {
             .pickerStyle(.segmented)
             Toggle("Natural direction (the strip follows your fingers)", isOn: $store.config.naturalSwipe)
             SliderRow(title: "Sensitivity", value: $store.config.swipeSensitivity, range: 0.4...2.5, step: 0.1, format: { String(format: "%.1f×", $0) })
+            Toggle("Smooth swipe (moves pictures of the windows, needs Screen Recording)", isOn: $store.config.smoothSwipe)
         }
         Section(title: "Mouse") {
             Toggle("Focus follows mouse", isOn: $store.config.focusFollowsMouse)
@@ -360,7 +361,7 @@ struct MacSetupPage: View {
     }
 
     private func reload() {
-        checks = MacSetup.run(swipeFingers: store.config.swipeFingers)
+        checks = MacSetup.run(swipeFingers: store.config.swipeFingers, smoothSwipe: store.config.smoothSwipe)
     }
 }
 

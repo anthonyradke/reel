@@ -95,9 +95,30 @@ final class OverlayController {
     func update(key: StripKey, result: LayoutResult, strip: Strip, display: Display, isFocusedStrip: Bool, live: Bool = false) {
         updateTabBars(key: key, result: result, live: live)
         updateDims(key: key, result: result, strip: strip, live: live)
+        updateIndicator(key: key, result: result, strip: strip, display: display)
+    }
+
+    func updateIndicator(key: StripKey, result: LayoutResult, strip: Strip, display: Display) {
         if let ind = indicators[display.uuid], ind.isVisible {
             ind.update(key: key, strip: strip, result: result, display: display)
         }
+    }
+
+    /// Reel's own panels on a strip and the window each one follows, so swipe pictures can
+    /// take them along.
+    func decorations(for key: StripKey) -> [(number: CGWindowID, owner: WindowID, frame: CGRect)] {
+        var out: [(number: CGWindowID, owner: WindowID, frame: CGRect)] = []
+        if key == manager.focusedKey, border.isVisible, let id = focusedID {
+            out.append((CGWindowID(border.windowNumber), id, Displays.toAX(border.frame)))
+        }
+        for (id, panel) in dims[key] ?? [:] where panel.isVisible {
+            out.append((CGWindowID(panel.windowNumber), id, Displays.toAX(panel.frame)))
+        }
+        for bar in tabBars[key] ?? [] where bar.isVisible {
+            guard let id = bar.activeWindow else { continue }
+            out.append((CGWindowID(bar.windowNumber), id, Displays.toAX(bar.frame)))
+        }
+        return out
     }
 
     func updateFocus(_ frame: CGRect?, live: Bool = false) {

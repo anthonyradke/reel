@@ -33,6 +33,8 @@ public struct Config: Codable, Equatable {
     public var swipeFingers: Int = 4 // 0 = off, 3 or 4
     public var naturalSwipe: Bool = true
     public var swipeSensitivity: Double = 1.0
+    /// Swipe with pictures of the windows, which keeps them in step (needs Screen Recording).
+    public var smoothSwipe: Bool = true
     public var focusFollowsMouse: Bool = false
     public var mouseFollowsFocus: Bool = false
     public var dragToReorder: Bool = true
@@ -87,6 +89,7 @@ extension Config {
         take(.swipeFingers, &swipeFingers)
         take(.naturalSwipe, &naturalSwipe)
         take(.swipeSensitivity, &swipeSensitivity)
+        take(.smoothSwipe, &smoothSwipe)
         take(.focusFollowsMouse, &focusFollowsMouse)
         take(.mouseFollowsFocus, &mouseFollowsFocus)
         take(.dragToReorder, &dragToReorder)

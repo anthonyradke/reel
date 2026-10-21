@@ -9,6 +9,7 @@ final class WindowManager: WindowTrackerDelegate {
     let tracker = WindowTracker()
     let animator = Animator()
     let overlays = OverlayController()
+    let proxy = SwipeProxy()
 
     private(set) var running = false
     var config: Config { ConfigStore.shared.config }
@@ -60,6 +61,17 @@ final class WindowManager: WindowTrackerDelegate {
         var startOffset: Double
         var lastTime: CFTimeInterval
         var velocity: Double = 0
+        var mode: GestureMode = .live
+        /// What the settle this swipe interrupted still had to do (focus the column it landed on).
+        var pending: (() -> Void)?
+    }
+
+    /// How a swipe moves the strip: the real windows, or pictures of them (see SwipeProxy).
+    enum GestureMode: Equatable {
+        case live
+        /// Pictures are still being captured; the windows hold still until they're ready.
+        case waiting(since: CFTimeInterval)
+        case pictures
     }
 
     private init() {
@@ -97,6 +109,7 @@ final class WindowManager: WindowTrackerDelegate {
         installMonitors()
         HotkeyManager.shared.enable(bindings: config.bindings)
         GestureMonitor.shared.start()
+        requestScreenRecordingIfNeeded()
         watchdog = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.heal() }
         if let w = tracker.focusedWindow() { tracker(tracker, focusChangedTo: w) }
         layoutAll(animated: false)
@@ -112,6 +125,7 @@ final class WindowManager: WindowTrackerDelegate {
         watchdog = nil
         HotkeyManager.shared.disable(keepStartBinding: true)
         GestureMonitor.shared.stop()
+        proxy.cancel()
         removeMonitors()
         animator.stopAll()
         bringBackParkedWindows()
@@ -153,6 +167,7 @@ final class WindowManager: WindowTrackerDelegate {
         guard running else { return }
         if new.bindings != old.bindings { HotkeyManager.shared.enable(bindings: new.bindings) }
         if new.swipeFingers != old.swipeFingers { GestureMonitor.shared.restart() }
+        if new.smoothSwipe != old.smoothSwipe || new.swipeFingers != old.swipeFingers { requestScreenRecordingIfNeeded() }
         if new.disabledDisplays != old.disabledDisplays {
             // Displays switched back on pick up their windows again.
             tracker.rescan()
@@ -862,6 +877,12 @@ final class WindowManager: WindowTrackerDelegate {
         let strip = strips[key] ?? Strip()
         let ctx = context(for: key, display: d)
         let result = Layout.compute(strip, context: ctx)
+        if let g = gesture, g.key == key, g.mode != .live {
+            // Pictures stand in for the windows: leave the real ones where they are.
+            overlays.updateIndicator(key: key, result: result, strip: strip, display: d)
+            onStateChange?()
+            return
+        }
         let animate = animated && config.animate && gesture?.key != key
         for p in result.placements {
             let shown = visibleMember(of: p.id)
@@ -1110,17 +1131,91 @@ final class WindowManager: WindowTrackerDelegate {
 
     // MARK: - Trackpad
 
+    /// Asks for Screen Recording (once) when smooth swipes are on, rather than in the middle of
+    /// the first swipe that could use it.
+    private func requestScreenRecordingIfNeeded() {
+        guard config.smoothSwipe, config.swipeFingers > 0, SwipeProxy.isSupported, !SwipeProxy.hasPermission else { return }
+        SwipeProxy.requestPermissionOnce()
+    }
+
+    /// Fingers landed on the trackpad: capture the strip now so a swipe can use the pictures.
+    func gesturePrepare() {
+        guard running, config.smoothSwipe, SwipeProxy.isSupported, SwipeProxy.hasPermission, gesture == nil,
+              let k = gestureKey(), let strip = strips[k], !strip.columns.isEmpty, let d = display(for: k) else { return }
+        if proxy.key == k {
+            if proxy.state == .settling || proxy.state == .preparing { return }
+            // Fingers touching down again a moment later (or a resting finger flickering) can
+            // use the pictures just taken.
+            if proxy.isReady(for: k, within: 0.5) { return }
+        }
+        let result = Layout.compute(strip, context: context(for: k, display: d))
+        // Every window of the strip, since a flick can bring any of them into view. Their real
+        // frames come from the capture, so nothing here waits on the apps.
+        var sources: [SwipeProxy.Source] = []
+        var anchors: [WindowID: CGPoint] = [:]
+        for p in result.placements {
+            let id = visibleMember(of: p.id)
+            guard tracker.windows[id] != nil, drag?.window != p.id else { continue }
+            let f = p.frame.pixelAligned
+            anchors[id] = f.origin
+            sources.append(.init(number: id, owner: id, frame: f, anchor: f.origin, onScreen: p.visible))
+        }
+        for deco in overlays.decorations(for: k) {
+            guard let anchor = anchors[deco.owner] else { continue }
+            sources.append(.init(number: deco.number, owner: deco.owner, frame: deco.frame, anchor: anchor, onScreen: true))
+        }
+        proxy.prepare(key: k, display: d, sources: sources) { [weak self] in self?.picturesReady() }
+    }
+
+    private func picturesReady() {
+        guard var g = gesture, case .waiting = g.mode, let strip = strips[g.key], proxy.isReady(for: g.key) else { return }
+        proxy.begin(offset: strip.viewOffset, frames: proxyFrames(g.key, offset: strip.viewOffset))
+        g.mode = .pictures
+        gesture = g
+    }
+
+    /// Where every window of the strip sits at a given scroll position.
+    private func proxyFrames(_ key: StripKey, offset: Double) -> [WindowID: CGRect] {
+        guard let strip = strips[key], let d = display(for: key) else { return [:] }
+        var out: [WindowID: CGRect] = [:]
+        for p in Layout.compute(strip, context: context(for: key, display: d), viewOffset: offset).placements {
+            out[visibleMember(of: p.id)] = p.frame.pixelAligned
+        }
+        return out
+    }
+
     func gestureBegan() {
         guard running, let k = gestureKey(), var strip = strips[k] else { return }
-        // The strip may still be settling from the last swipe or key press. Pick it up where it
-        // is on screen, not where it was heading, or the first frame jumps to the old target.
-        let ids = strip.columns.flatMap(\.windows).map { visibleMember(of: $0) }
-        if let id = ids.first(where: { animator.currentFrame(of: $0) != nil }),
-           let current = animator.currentFrame(of: id), let target = animator.targetFrame(of: id) {
-            strip.viewOffset += Double(target.minX - current.minX)
+        var mode = GestureMode.live
+        var pending: (() -> Void)?
+        if proxy.key == k, proxy.state == .settling {
+            // Caught mid-settle: carry on from where the pictures are.
+            strip.viewOffset = proxy.offset
             strips[k] = strip
+            pending = proxy.resume()
+            mode = .pictures
+        } else {
+            // The strip may still be settling from the last swipe or key press. Pick it up where it
+            // is on screen, not where it was heading, or the first frame jumps to the old target.
+            let ids = strip.columns.flatMap(\.windows).map { visibleMember(of: $0) }
+            if let id = ids.first(where: { animator.currentFrame(of: $0) != nil }),
+               let current = animator.currentFrame(of: id), let target = animator.targetFrame(of: id) {
+                strip.viewOffset += Double(target.minX - current.minX)
+                strips[k] = strip
+            }
+            if proxy.key == k, proxy.state == .ready || proxy.state == .preparing {
+                // Windows still mid-animation wouldn't match the pictures.
+                if animator.isRunning {
+                    proxy.cancel()
+                } else if proxy.isReady(for: k) {
+                    proxy.begin(offset: strip.viewOffset, frames: proxyFrames(k, offset: strip.viewOffset))
+                    mode = .pictures
+                } else if proxy.state == .preparing {
+                    mode = .waiting(since: CACurrentMediaTime())
+                }
+            }
         }
-        gesture = GestureState(key: k, startOffset: strip.viewOffset, lastTime: CACurrentMediaTime())
+        gesture = GestureState(key: k, startOffset: strip.viewOffset, lastTime: CACurrentMediaTime(), mode: mode, pending: pending)
         overlays.showIndicator(for: k, sticky: true)
     }
 
@@ -1142,7 +1237,13 @@ final class WindowManager: WindowTrackerDelegate {
         g.lastTime = now
         strip.viewOffset = next
         strips[g.key] = strip
+        if case .waiting(let since) = g.mode, now - since > 0.15 {
+            // The pictures are taking too long; move the real windows instead.
+            proxy.cancel()
+            g.mode = .live
+        }
         gesture = g
+        if g.mode == .pictures { proxy.move(offset: next, frames: proxyFrames(g.key, offset: next)) }
         layout(g.key, animated: false)
     }
 
@@ -1150,12 +1251,20 @@ final class WindowManager: WindowTrackerDelegate {
         guard running, let g = gesture else { return }
         gesture = nil
         overlays.showIndicator(for: g.key, sticky: false)
-        guard var strip = strips[g.key], let d = display(for: g.key), !strip.columns.isEmpty else { return }
+        guard var strip = strips[g.key], let d = display(for: g.key), !strip.columns.isEmpty else {
+            proxy.cancel()
+            g.pending?()
+            return
+        }
         let geo = StripGeometry(strip: strip, context: context(for: g.key, display: d))
         // Fingers that stopped before lifting don't throw the strip.
         let velocity = CACurrentMediaTime() - g.lastTime > 0.06 ? 0 : g.velocity
         let projected = cancelled ? g.startOffset : Spring.projectedRest(value: strip.viewOffset, velocity: velocity, decelerationRate: 0.994)
-        guard let snap = geo.snapColumn(forOffset: projected, mode: config.centerMode) else { return }
+        guard let snap = geo.snapColumn(forOffset: projected, mode: config.centerMode) else {
+            proxy.cancel()
+            g.pending?()
+            return
+        }
         let target: Double
         if config.centerMode == .always {
             target = geo.starts[snap] + geo.widths[snap] / 2 - geo.viewportWidth / 2
@@ -1168,10 +1277,40 @@ final class WindowManager: WindowTrackerDelegate {
         strip.viewOffset = target
         if !keep { strip.focused = snap; strip.focusedPin = nil }
         strips[g.key] = strip
-        animator.carryVelocity(-velocity, windows: strip.columns.flatMap(\.windows).map { visibleMember(of: $0) })
-        layout(g.key, animated: true)
-        if !keep, let id = strip.focusedWindow { focusWindow(id, raise: true, warp: false) }
+        let focusID = keep ? nil : strip.focusedWindow
+        // A new focus replaces the one the interrupted settle still owed; otherwise that one is due.
+        let pending = focusID == nil ? g.pending : nil
+        if g.mode == .pictures {
+            // The pictures spring to the target while the real windows jump there underneath.
+            let key = g.key
+            proxy.settle(to: target, velocity: velocity, omega: config.springResponse, animated: config.animate,
+                         frames: { [weak self] o in self?.proxyFrames(key, offset: o) ?? [:] },
+                         inPlace: { [weak self] shown in self?.windowsInPlace(key, shown: shown) ?? true },
+                         done: { [weak self] in
+                             // Raising a window any earlier would put it over the pictures.
+                             if let id = focusID { self?.focusWindow(id, raise: true, warp: false) }
+                             pending?()
+                         })
+            layout(g.key, animated: false)
+        } else {
+            if case .waiting = g.mode { proxy.cancel() }
+            animator.carryVelocity(-velocity, windows: strip.columns.flatMap(\.windows).map { visibleMember(of: $0) })
+            layout(g.key, animated: true)
+            if let id = focusID { focusWindow(id, raise: true, warp: false) }
+            pending?()
+        }
         scheduleSave()
+    }
+
+    /// Whether the strip's on-screen windows are where their pictures are drawn (`shown`).
+    private func windowsInPlace(_ key: StripKey, shown: [WindowID: CGRect]) -> Bool {
+        guard let strip = strips[key], let d = display(for: key) else { return true }
+        for p in Layout.compute(strip, context: context(for: key, display: d)).placements where p.visible {
+            let id = visibleMember(of: p.id)
+            guard let want = shown[id], let f = tracker.windows[id]?.frame else { continue }
+            if abs(f.minX - want.minX) > 2 || abs(f.minY - want.minY) > 2 { return false }
+        }
+        return true
     }
 
     private func gestureKey() -> StripKey? {
