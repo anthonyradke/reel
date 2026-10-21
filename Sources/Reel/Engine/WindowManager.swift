@@ -890,6 +890,9 @@ final class WindowManager: WindowTrackerDelegate {
     // MARK: - Commands
 
     /// The strip commands act on: the one with the focused window, else the display under the mouse.
+    /// The strip the indicator shows when it's called up by hand.
+    func indicatorKey() -> StripKey? { commandKey() }
+
     private func commandKey() -> StripKey? {
         if let k = focusedKey, activeKeys.values.contains(k) { return k }
         let loc = NSEvent.mouseLocation

@@ -39,6 +39,7 @@ final class OverlayController {
     private var focusedID: WindowID?
     private var holdingModifiers = false
     private var stickyIndicator = false
+    private var holdWork: DispatchWorkItem?
 
     private var manager: WindowManager { WindowManager.shared }
     private var config: Config { ConfigStore.shared.config }
@@ -174,7 +175,18 @@ final class OverlayController {
         let held = flags.contains(.control) && flags.contains(.option)
         guard held != holdingModifiers else { return }
         holdingModifiers = held
-        if !held {
+        holdWork?.cancel()
+        if held {
+            // Holding ⌃⌥ for a moment brings the strip up, so it can be clicked or dragged.
+            // A quick shortcut shows it anyway, so wait a beat before popping it up.
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.holdingModifiers, self.manager.running,
+                      let key = self.manager.indicatorKey() else { return }
+                self.showIndicator(for: key, sticky: false)
+            }
+            holdWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+        } else {
             indicators.values.forEach { scheduleIndicatorHide($0) }
         }
     }
