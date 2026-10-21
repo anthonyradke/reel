@@ -9,6 +9,8 @@ final class EngineState: ObservableObject {
     @Published var trusted = AX.isTrusted
     @Published var displays: [Display] = []
     private var timer: Timer?
+    /// Set by the snapshot renderer so the pictures show a running engine.
+    static var showsAsRunning = false
 
     private init() {
         refresh()
@@ -17,8 +19,9 @@ final class EngineState: ObservableObject {
 
     func refresh() {
         let wm = WindowManager.shared
-        if running != wm.running { running = wm.running }
-        let t = AX.isTrusted
+        let r = wm.running || Self.showsAsRunning
+        if running != r { running = r }
+        let t = AX.isTrusted || Self.showsAsRunning
         if trusted != t { trusted = t }
         let d = Displays.current()
         if d != displays { displays = d }
@@ -47,7 +50,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .input: return "hand.draw"
         case .shortcuts: return "keyboard"
         case .rules: return "list.bullet.rectangle"
-        case .displays: return "display.2"
+        case .displays: return "display"
         case .setup: return "checklist"
         case .automation: return "terminal"
         case .about: return "info.circle"
@@ -59,9 +62,12 @@ struct SettingsView: View {
     @EnvironmentObject var store: ConfigStore
     @EnvironmentObject var engine: EngineState
     @State private var page: SettingsPage?
+    /// Room above the sidebar for traffic lights, when rendered outside a real window.
+    private let titleBarInset: CGFloat
 
-    init(page: SettingsPage = .general) {
+    init(page: SettingsPage = .general, titleBarInset: CGFloat = 0) {
         _page = State(initialValue: page)
+        self.titleBarInset = titleBarInset
     }
 
     var body: some View {
@@ -70,6 +76,7 @@ struct SettingsView: View {
                 Label(p.rawValue, systemImage: p.icon).tag(p)
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
+            .safeAreaInset(edge: .top) { Color.clear.frame(height: titleBarInset) }
             .safeAreaInset(edge: .bottom) { statusFooter }
         } detail: {
             ScrollView {

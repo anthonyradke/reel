@@ -114,13 +114,14 @@ public enum Command: Equatable, Hashable {
     public var title: String {
         switch self {
         case .focus(let d): return "Focus \(d.rawValue)"
-        case .focusFirst: return "Focus first window"
-        case .focusLast: return "Focus last window"
-        case .focusIndex(let n): return n == 9 ? "Focus last place" : "Focus place \(n)"
+        case .focusFirst: return "Focus the first column"
+        case .focusLast: return "Focus the last column"
+        // 9 is always the last column, the way ⌘9 picks the last browser tab.
+        case .focusIndex(let n): return n == 9 ? "Focus column 9 (the last one)" : "Focus column \(n)"
         case .move(let d): return "Move window \(d.rawValue)"
-        case .moveFirst: return "Move window to the start"
-        case .moveLast: return "Move window to the end"
-        case .moveToIndex(let n): return n == 9 ? "Move window to the last place" : "Move window to place \(n)"
+        case .moveFirst: return "Move column to the start"
+        case .moveLast: return "Move column to the end"
+        case .moveToIndex(let n): return n == 9 ? "Move column to 9 (the end)" : "Move column to \(n)"
         case .cycleWidth: return "Cycle width"
         case .cycleWidthBack: return "Cycle width backwards"
         case .fullWidth: return "Full width"

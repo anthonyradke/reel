@@ -17,6 +17,10 @@ than the screen, it scrolls with the keyboard or a three or four finger trackpad
 
 It's a native AppKit app with no scripting layer to set up and no dependencies outside the system frameworks.
 
+<p align="center">
+  <img src="docs/settings-layout.jpg" width="800" alt="Reel's layout settings">
+</p>
+
 ## Features
 
 - Normal windows tile into columns. Dialogs, sheets, Quick Look, fixed-size windows and anything matched by a rule stay
@@ -47,14 +51,16 @@ Reel works best with, and warns if another window manager is running.
 
 ## Keyboard shortcuts
 
-All defaults use ⌃⌥ (Control-Option). Holding ⌃⌥ for a moment shows the strip overview.
+All defaults use ⌃⌥ (Control-Option). Holding ⌃⌥ for a moment shows the strip overview. Every shortcut can be
+changed, or given a second key, on the Shortcuts page.
 
 | Keys | Action |
 |---|---|
 | ⌃⌥ ← → or H L | Focus the column to the left or right |
 | ⌃⌥ ↑ ↓ or K J | Focus the window above or below in a stacked column |
 | ⌃⌥⇧ with any of the above | Move the window instead of the focus |
-| ⌃⌥ 1 to 9 | Focus a column by position (⌃⌥⇧ moves the window there) |
+| ⌃⌥⌘ ← → | Focus the first or last column (⌃⌥⌘⇧ moves the column there) |
+| ⌃⌥ 1 to 9 | Focus a column by position, 9 always being the last (⌃⌥⇧ moves the column there) |
 | ⌃⌥ R | Cycle preset widths (⇧ cycles backwards) |
 | ⌃⌥ F | Toggle full width |
 | ⌃⌥ C | Centre the column |
@@ -144,3 +150,14 @@ python3 scripts/live-test.py
 This drives the installed app with four TextEdit windows and runs each action through `reelctl`. After every step it
 checks that each window sits where Reel placed it, that nothing overlaps, and that scrolled-away windows are off
 screen. It takes about a minute and moves real windows, so run it when you're not using the Mac.
+
+### Screenshots and demo
+
+```sh
+REEL_SNAPSHOT=/tmp/shots .build/debug/Reel   # every settings page, plus hero-*.png on a wallpaper
+python3 scripts/record-demo.py               # records the strip in action into docs/demo.gif
+```
+
+The demo script opens captioned TextEdit windows, drives them through `reelctl` while `screencapture` records the
+screen, and converts the recording with `scripts/mov-to-gif.swift`. Run it on an empty Space; the terminal needs the
+Screen Recording permission.

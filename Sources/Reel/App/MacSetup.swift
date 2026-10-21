@@ -34,7 +34,9 @@ enum MacSetup {
         if swipeFingers == 0 {
             out.append(MacSetupCheck(id: "swipe", title: "Trackpad swipe", detail: "Swiping the strip is off in Reel.", status: .ok))
         } else if swipeFingers == 4 {
-            let clash = fourHoriz != 0
+            // Settings has one picker for full-screen swipes, so a three-finger choice (2 in the
+            // three-finger key) means four fingers are free even if the old four-finger value lingers.
+            let clash = fourHoriz != 0 && threeHoriz != 2
             out.append(MacSetupCheck(
                 id: "swipe", title: "Four-finger swipe is free",
                 detail: clash ? "macOS also switches desktops with a four-finger swipe. Turn off Trackpad › More Gestures › Swipe between full-screen applications." :
