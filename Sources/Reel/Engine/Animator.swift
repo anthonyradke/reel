@@ -52,9 +52,12 @@ final class Animator {
             e = existing
         } else {
             // First time we see it: start from where the window actually is.
-            let start = w.frame ?? frame
+            let actual = w.frame
+            let start = actual ?? frame
             e = Entry(window: w, frame: CGRect(origin: start.origin, size: frame.size), display: display, omega: omega)
             entries[w.id] = e
+            // Only resize it if it isn't the right size already.
+            e.lastSentSize = actual?.size
             // A window that starts off screen shouldn't fly across the display.
             if !display.frame.intersects(start) { e.x.value = Double(frame.minX); e.y.value = Double(frame.minY) }
         }
@@ -189,7 +192,13 @@ final class Animator {
         let b = e.y.step(dt)
         let moving = a || b
         if moving {
-            send(e, origin: CGPoint(x: e.x.value.rounded(), y: e.y.value.rounded()))
+            // macOS won't leave less than about 40 points of a window on screen, so a window
+            // sliding off the edge would be pushed back and then jump when it parks. Stop it at
+            // the parking spot instead: one point on screen, which macOS allows.
+            let d = e.display.frame
+            let w = (e.lastSentSize ?? e.target.size).width
+            let x = min(max(e.x.value.rounded(), d.minX - w + 1), d.maxX - 1)
+            send(e, origin: CGPoint(x: x, y: e.y.value.rounded()))
         } else {
             settle(e)
         }
@@ -203,21 +212,27 @@ final class Animator {
             send(e, origin: e.target.origin)
         } else {
             guard let all = manager?.displays else { return }
-            let spot = Displays.parkingSpot(for: e.target.size, on: e.display, side: e.hiddenSide, all: all, y: e.target.minY)
+            let spot = Displays.parkingSpot(for: e.lastSentSize ?? e.target.size, on: e.display, side: e.hiddenSide, all: all, y: e.target.minY)
             e.parked = true
             send(e, origin: spot)
         }
     }
 
     private func sendSizeIfNeeded(_ e: Entry) {
+        // A window off screen keeps its old size until it comes back. Growing has to happen
+        // somewhere on the display, so resizing it now could flash it onto the screen.
+        guard e.visible else { return }
         let size = e.target.size
-        guard e.lastSentSize.map({ abs($0.width - size.width) > 0.5 || abs($0.height - size.height) > 0.5 }) ?? true else { return }
+        let previous = e.lastSentSize
+        guard previous.map({ abs($0.width - size.width) > 0.5 || abs($0.height - size.height) > 0.5 }) ?? true else { return }
         e.lastSentSize = size
-        // Resize where the window is now (the move toward the target follows on the spring),
-        // but somewhere the new size fits on the display, or macOS cuts it short.
+        // Resize where the window is now (the move toward the target follows on the spring).
+        // A window that grows has to do it somewhere the new size fits on the display, or macOS
+        // cuts it short; one that shrinks can stay put rather than flash across the screen.
         let origin = e.lastSentOrigin ?? CGPoint(x: e.x.value.rounded(), y: e.y.value.rounded())
         let d = e.display.frame
-        let resizeAt = CGPoint(x: min(max(origin.x, d.minX), max(d.minX, d.maxX - size.width)), y: e.target.minY)
+        let grows = previous.map { size.width > $0.width + 0.5 || size.height > $0.height + 0.5 } ?? true
+        let resizeAt = grows ? CGPoint(x: min(max(origin.x, d.minX), max(d.minX, d.maxX - size.width)), y: e.target.minY) : nil
         e.window.lastCommanded = CGRect(origin: e.target.origin, size: size)
         e.window.lastCommandedAt = CACurrentMediaTime()
         e.window.app.mover.set(e.window.element, app: e.window.app.element, id: e.id, origin: origin, size: size, resizeAt: resizeAt)

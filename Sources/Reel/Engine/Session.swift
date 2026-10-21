@@ -25,6 +25,9 @@ struct SavedSession: Codable {
     var strips: [SavedStrip]
     var floating: [WindowSignature]
     var savedAt: Date
+    /// Minimum widths windows turned out to have, so a restart of Reel doesn't have to learn
+    /// them again by squeezing each window. Keyed by window id: only the same window gets it.
+    var minWidths: [WindowID: Double]?
 }
 
 enum SessionStore {

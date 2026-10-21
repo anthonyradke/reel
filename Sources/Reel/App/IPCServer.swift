@@ -79,6 +79,20 @@ final class IPCServer {
         case "set":
             guard parts.count > 1 else { return #"{"error":"usage: set <key> <json value>"}"# }
             return setConfig(parts[1])
+        case "swipe":
+            // `swipe <distance> <ms>`: plays a trackpad swipe through the same path the fingers
+            // take, for testing. Distance is a fraction of the trackpad's width.
+            let args = (parts.count > 1 ? parts[1] : "").split(separator: " ").compactMap { Double($0) }
+            let distance = args.first ?? 0.3, ms = args.count > 1 ? args[1] : 300
+            let frames = max(1, Int(ms / 1000 * 120))
+            wm.gestureBegan()
+            for i in 1...frames {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) / 120) {
+                    wm.gestureChanged(dx: distance / Double(frames))
+                    if i == frames { wm.gestureEnded(cancelled: false) }
+                }
+            }
+            return #"{"ok":true}"#
         default:
             guard let cmd = Command(name: line) else {
                 return json(["error": "unknown command: \(line)"])

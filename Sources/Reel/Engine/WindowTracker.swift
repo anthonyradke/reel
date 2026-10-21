@@ -334,8 +334,13 @@ final class WindowMover {
                         AX.setPosition(el, item.resizeAt ?? origin)
                         AX.setSize(el, size)
                         if let actual = AX.size(el), actual.width > size.width + 4 {
-                            let report = onSizeRefused
-                            DispatchQueue.main.async { report?(id, size, actual) }
+                            // Some apps (Chromium, Electron) take the new size a moment later.
+                            // Look again before deciding the window has a minimum width.
+                            queue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                                guard let actual = AX.size(el), actual.width > size.width + 4 else { return }
+                                let report = self?.onSizeRefused
+                                DispatchQueue.main.async { report?(id, size, actual) }
+                            }
                         }
                     }
                     AX.setPosition(el, origin)

@@ -81,12 +81,12 @@ final class WindowManager: WindowTrackerDelegate {
         Log.engine("engine starting")
         AX.setGlobalTimeout(0.5)
         refreshDisplays()
-        if config.restoreSession, let s = SessionStore.load() {
-            restorer = SessionRestorer(s)
-        }
+        let session = config.restoreSession ? SessionStore.load() : nil
+        if let session { restorer = SessionRestorer(session) }
         bulkAdding = true
         tracker.start()
         bulkAdding = false
+        for (id, width) in session?.minWidths ?? [:] { tracker.windows[id]?.minWidth = CGFloat(width) }
         finishBulkAdd()
         // Saved scroll positions were for the old widths; aim each strip at its focus again.
         for k in Array(strips.keys) {
@@ -548,6 +548,7 @@ final class WindowManager: WindowTrackerDelegate {
         guard (w.minWidth ?? 0) + 2 < actual.width else { return }
         w.minWidth = actual.width
         Log.engine("\(w.app.name) \(w.id) keeps a minimum width of \(Int(actual.width)) (asked for \(Int(asked.width)))")
+        scheduleSave()
         if let k = key(containing: w.group) {
             ensureFocusedVisible(k, previous: nil)
             layout(k, animated: true)
@@ -765,12 +766,13 @@ final class WindowManager: WindowTrackerDelegate {
             for p in result.placements where p.visible {
                 let id = visibleMember(of: p.id)
                 guard let w = tracker.windows[id], let f = w.frame, now - w.lastCommandedAt > 1.5 else { continue }
-                let target = p.frame.integral
+                let target = p.frame.pixelAligned
                 if w.minWidth == nil, f.width > target.width + 4, abs(f.minX - target.minX) <= 6 {
                     // The app widened itself after the fact: that's its minimum width.
                     w.minWidth = f.width
                     drifted = true
                     Log.engine("\(w.app.name) \(id) widened itself to \(Int(f.width)) (wanted \(Int(target.width)))")
+                    scheduleSave()
                     continue
                 }
                 let moved = abs(f.minX - target.minX) > 6 || abs(f.minY - target.minY) > 6
@@ -813,6 +815,10 @@ final class WindowManager: WindowTrackerDelegate {
 
     /// Scrolls the strip so the focused column is in view, the way the centre mode says.
     func ensureFocusedVisible(_ key: StripKey, previous: Int?) {
+        // While fingers are on the trackpad they own the scroll position. Anything else that
+        // scrolls (a focus change, a window learning its minimum width) would yank the strip
+        // out from under them.
+        guard gesture?.key != key else { return }
         guard var strip = strips[key], let d = display(for: key) else { return }
         guard strip.focusedPin == nil, strip.columns.indices.contains(strip.focused) else {
             if let d = display(for: key) {
@@ -839,7 +845,7 @@ final class WindowManager: WindowTrackerDelegate {
         let strip = strips[key] ?? Strip()
         let ctx = context(for: key, display: d)
         let result = Layout.compute(strip, context: ctx)
-        let animate = animated && config.animate
+        let animate = animated && config.animate && gesture?.key != key
         for p in result.placements {
             let shown = visibleMember(of: p.id)
             for member in members(of: p.id) {
@@ -850,7 +856,7 @@ final class WindowManager: WindowTrackerDelegate {
                 }
                 var frame = p.frame
                 if p.keepsHeight, let f = w.frame { frame.size.height = min(frame.height, f.height) }
-                animator.setTarget(w, frame: frame.integral, visible: p.visible, hiddenSide: p.hiddenSide ?? .right,
+                animator.setTarget(w, frame: frame.pixelAligned, visible: p.visible, hiddenSide: p.hiddenSide ?? .right,
                                    display: d, animated: animate)
             }
         }
@@ -1087,7 +1093,15 @@ final class WindowManager: WindowTrackerDelegate {
     // MARK: - Trackpad
 
     func gestureBegan() {
-        guard running, let k = gestureKey(), let strip = strips[k] else { return }
+        guard running, let k = gestureKey(), var strip = strips[k] else { return }
+        // The strip may still be settling from the last swipe or key press. Pick it up where it
+        // is on screen, not where it was heading, or the first frame jumps to the old target.
+        let ids = strip.columns.flatMap(\.windows).map { visibleMember(of: $0) }
+        if let id = ids.first(where: { animator.currentFrame(of: $0) != nil }),
+           let current = animator.currentFrame(of: id), let target = animator.targetFrame(of: id) {
+            strip.viewOffset += Double(target.minX - current.minX)
+            strips[k] = strip
+        }
         gesture = GestureState(key: k, startOffset: strip.viewOffset, lastTime: CACurrentMediaTime())
         overlays.showIndicator(for: k, sticky: true)
     }
@@ -1120,7 +1134,9 @@ final class WindowManager: WindowTrackerDelegate {
         overlays.showIndicator(for: g.key, sticky: false)
         guard var strip = strips[g.key], let d = display(for: g.key), !strip.columns.isEmpty else { return }
         let geo = StripGeometry(strip: strip, context: context(for: g.key, display: d))
-        let projected = cancelled ? g.startOffset : Spring.projectedRest(value: strip.viewOffset, velocity: g.velocity, decelerationRate: 0.994)
+        // Fingers that stopped before lifting don't throw the strip.
+        let velocity = CACurrentMediaTime() - g.lastTime > 0.06 ? 0 : g.velocity
+        let projected = cancelled ? g.startOffset : Spring.projectedRest(value: strip.viewOffset, velocity: velocity, decelerationRate: 0.994)
         guard let snap = geo.snapColumn(forOffset: projected, mode: config.centerMode) else { return }
         let target: Double
         if config.centerMode == .always {
@@ -1134,7 +1150,7 @@ final class WindowManager: WindowTrackerDelegate {
         strip.viewOffset = target
         if !keep { strip.focused = snap; strip.focusedPin = nil }
         strips[g.key] = strip
-        animator.carryVelocity(-g.velocity, windows: strip.columns.flatMap(\.windows).map { visibleMember(of: $0) })
+        animator.carryVelocity(-velocity, windows: strip.columns.flatMap(\.windows).map { visibleMember(of: $0) })
         layout(g.key, animated: true)
         if !keep, let id = strip.focusedWindow { focusWindow(id, raise: true, warp: false) }
         scheduleSave()
@@ -1229,7 +1245,9 @@ final class WindowManager: WindowTrackerDelegate {
             guard let w = tracker.windows[id] else { return nil }
             return WindowSignature(id: id, bundleID: w.app.bundleID, title: w.title)
         }
-        SessionStore.save(SavedSession(strips: saved, floating: floats, savedAt: Date()))
+        var minWidths: [WindowID: Double] = [:]
+        for w in tracker.windows.values { if let m = w.minWidth { minWidths[w.id] = Double(m) } }
+        SessionStore.save(SavedSession(strips: saved, floating: floats, savedAt: Date(), minWidths: minWidths))
     }
 }
 
@@ -1253,5 +1271,14 @@ extension Strip {
         for side in PinSide.allCases {
             if let r = pinned[side]?.windows.firstIndex(of: old) { pinned[side]!.windows[r] = new }
         }
+    }
+}
+
+extension CGRect {
+    /// Rounds the origin and the size separately. `integral` grows the size whenever the origin
+    /// has a fraction, so a window scrolled by a fractional offset would flip between two widths
+    /// from frame to frame, and every flip is a resize.
+    var pixelAligned: CGRect {
+        CGRect(x: minX.rounded(), y: minY.rounded(), width: width.rounded(), height: height.rounded())
     }
 }
