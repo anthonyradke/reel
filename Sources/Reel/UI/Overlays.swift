@@ -12,7 +12,9 @@ class OverlayPanel: NSPanel {
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
         self.level = level
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        // Transient: hidden by Show Desktop and Mission Control along with the windows it
+        // decorates (stationary would leave it floating on an empty desktop).
+        collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle, .fullScreenAuxiliary]
         animationBehavior = .none
     }
 
