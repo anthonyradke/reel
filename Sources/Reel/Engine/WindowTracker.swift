@@ -23,7 +23,8 @@ final class TrackedApp {
     }
 
     var runningApp: NSRunningApplication? { NSRunningApplication(processIdentifier: pid) }
-    var icon: NSImage? { runningApp?.icon }
+    /// Looked up once: the strip indicator and tab bars ask for it on every redraw.
+    lazy var icon: NSImage? = runningApp?.icon
 }
 
 /// One window the tracker knows about.
@@ -75,6 +76,9 @@ final class WindowTracker {
     weak var delegate: WindowTrackerDelegate?
     private(set) var apps: [pid_t: TrackedApp] = [:]
     private(set) var windows: [WindowID: TrackedWindow] = [:]
+    /// Window ids by element. Every animation frame comes back as a moved notification, and
+    /// asking the app for the id each time would be a round trip on the main thread.
+    private var byElement: [AXUIElement: WindowID] = [:]
     private var workspaceObservers: [NSObjectProtocol] = []
     private let selfPID = ProcessInfo.processInfo.processIdentifier
 
@@ -102,6 +106,7 @@ final class WindowTracker {
         workspaceObservers.removeAll()
         for pid in Array(apps.keys) { unwatch(pid: pid, notify: false) }
         windows.removeAll()
+        byElement.removeAll()
     }
 
     // MARK: - Apps
@@ -153,7 +158,7 @@ final class WindowTracker {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         }
         for w in windows.values where w.app.pid == pid {
-            windows[w.id] = nil
+            forget(w)
             if notify { delegate?.tracker(self, didRemove: w) }
         }
     }
@@ -178,7 +183,7 @@ final class WindowTracker {
         guard let info = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return }
         let alive = Set(info.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value })
         for w in windows.values where !alive.contains(w.id) {
-            windows[w.id] = nil
+            forget(w)
             delegate?.tracker(self, didRemove: w)
         }
     }
@@ -195,6 +200,7 @@ final class WindowTracker {
         let size = AX.size(el) ?? .zero
         let w = TrackedWindow(id: id, element: el, app: app, title: title, subrole: subrole, height: size.height)
         windows[id] = w
+        byElement[el] = id
         if let obs = app.observer {
             let refcon = Unmanaged.passUnretained(self).toOpaque()
             for n in [kAXUIElementDestroyedNotification, kAXMovedNotification, kAXResizedNotification,
@@ -206,7 +212,13 @@ final class WindowTracker {
         return w
     }
 
+    private func forget(_ w: TrackedWindow) {
+        windows[w.id] = nil
+        byElement[w.element] = nil
+    }
+
     func window(for el: AXUIElement) -> TrackedWindow? {
+        if let id = byElement[el], let w = windows[id] { return w }
         guard let id = AX.windowID(el) else {
             // Destroyed elements no longer answer; fall back to identity.
             return windows.values.first { CFEqual($0.element, el) }
@@ -244,8 +256,8 @@ final class WindowTracker {
         case kAXApplicationShownNotification:
             delegate?.tracker(self, appHidden: app, hidden: false)
         case kAXUIElementDestroyedNotification:
-            if let w = windows.values.first(where: { CFEqual($0.element, element) }) {
-                windows[w.id] = nil
+            if let w = byElement[element].flatMap({ windows[$0] }) ?? windows.values.first(where: { CFEqual($0.element, element) }) {
+                forget(w)
                 delegate?.tracker(self, didRemove: w)
             }
         case kAXMovedNotification:
@@ -298,6 +310,10 @@ final class WindowMover {
     }
     private var pending: [WindowID: Move] = [:]
     private var scheduled = false
+    /// Queue-only state for the current burst of moves (an animation, a swipe).
+    private var inBurst = false
+    private var restoreEnhancedUI = false
+    private var burstEnd: DispatchWorkItem?
     /// Called on the main thread when a window ends up wider than we asked: the app has a
     /// minimum width. Gets the window, the size asked for and the size it actually took.
     var onSizeRefused: ((WindowID, CGSize, CGSize) -> Void)?
@@ -325,27 +341,50 @@ final class WindowMover {
             if work.isEmpty { scheduled = false; lock.unlock(); return }
             lock.unlock()
             guard let app = work.first?.value.app else { continue }
-            AX.withoutEnhancedUI(app) {
-                for (id, item) in work {
-                    let el = item.window, origin = item.origin
-                    if let size = item.size {
-                        // Position, size, position: some apps clamp the size against the old
-                        // position, and some move themselves when resized.
-                        AX.setPosition(el, item.resizeAt ?? origin)
-                        AX.setSize(el, size)
-                        if let actual = AX.size(el), actual.width > size.width + 4 {
-                            // Some apps (Chromium, Electron) take the new size a moment later.
-                            // Look again before deciding the window has a minimum width.
-                            queue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                                guard let actual = AX.size(el), actual.width > size.width + 4 else { return }
-                                let report = self?.onSizeRefused
-                                DispatchQueue.main.async { report?(id, size, actual) }
-                            }
+            beginBurst(app)
+            for (id, item) in work {
+                let el = item.window, origin = item.origin
+                if let size = item.size {
+                    // Position, size, position: some apps clamp the size against the old
+                    // position, and some move themselves when resized.
+                    AX.setPosition(el, item.resizeAt ?? origin)
+                    AX.setSize(el, size)
+                    if let actual = AX.size(el), actual.width > size.width + 4 {
+                        // Some apps (Chromium, Electron) take the new size a moment later.
+                        // Look again before deciding the window has a minimum width.
+                        queue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                            guard let actual = AX.size(el), actual.width > size.width + 4 else { return }
+                            let report = self?.onSizeRefused
+                            DispatchQueue.main.async { report?(id, size, actual) }
                         }
                     }
-                    AX.setPosition(el, origin)
                 }
+                AX.setPosition(el, origin)
             }
         }
+    }
+
+    /// Some apps animate every move while AXEnhancedUserInterface is on (tools like VoiceOver
+    /// set it), which makes the strip lag. Turn it off once for a burst of moves and back on
+    /// when they stop, rather than flipping it (three round trips) on every frame.
+    private func beginBurst(_ app: AXUIElement) {
+        burstEnd?.cancel()
+        if !inBurst {
+            inBurst = true
+            if AX.bool(app, AX.enhancedUI) == true {
+                AX.set(app, AX.enhancedUI, kCFBooleanFalse)
+                restoreEnhancedUI = true
+            }
+        }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.inBurst = false
+            if self.restoreEnhancedUI {
+                self.restoreEnhancedUI = false
+                AX.set(app, AX.enhancedUI, kCFBooleanTrue)
+            }
+        }
+        burstEnd = work
+        queue.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 }

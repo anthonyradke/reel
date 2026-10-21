@@ -39,7 +39,7 @@ final class IndicatorPanel: OverlayPanel {
         let area = display.visibleFrame
         // Top centre, just under the menu bar (AX coordinates grow downwards).
         let frame = CGRect(x: area.midX - size.width / 2, y: area.minY + 10, width: size.width, height: size.height)
-        setFrame(Displays.toAppKit(frame), display: true)
+        move(to: Displays.toAppKit(frame))
         view.needsDisplay = true
     }
 

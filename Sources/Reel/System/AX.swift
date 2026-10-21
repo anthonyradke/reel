@@ -107,13 +107,6 @@ enum AX {
         AXUIElementPerformAction(el, kAXRaiseAction as CFString)
     }
 
-    /// Some apps animate every move when this is on (it's set by tools like VoiceOver),
-    /// which makes the strip lag. Turn it off for the duration of a move.
-    static func withoutEnhancedUI<T>(_ app: AXUIElement, _ body: () -> T) -> T {
-        let attr = "AXEnhancedUserInterface"
-        let was = bool(app, attr) ?? false
-        if was { set(app, attr, kCFBooleanFalse) }
-        defer { if was { set(app, attr, kCFBooleanTrue) } }
-        return body()
-    }
+    /// Set by assistive tools like VoiceOver; some apps animate every move while it's on.
+    static let enhancedUI = "AXEnhancedUserInterface"
 }

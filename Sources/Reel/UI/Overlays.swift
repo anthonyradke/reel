@@ -19,14 +19,35 @@ class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
+    private var orderedAbove: WindowID??
+
     /// Places the panel at an AX (top-left origin) frame and orders it just above a window.
-    func show(at axFrame: CGRect, above window: WindowID?) {
-        setFrame(Displays.toAppKit(axFrame), display: true)
+    /// `keepOrder` skips the reorder when it's already up above that window: during a swipe
+    /// this runs for every touch frame, and nothing changes the stacking then.
+    func show(at axFrame: CGRect, above window: WindowID?, keepOrder: Bool = false) {
+        move(to: Displays.toAppKit(axFrame))
+        if keepOrder, isVisible, orderedAbove == .some(window) { return }
+        orderedAbove = .some(window)
         if let window {
             order(.above, relativeTo: Int(window))
         } else {
             orderFrontRegardless()
         }
+    }
+
+    /// Moves without resizing when the size is the same. Resizing a window reallocates its
+    /// backing store; moving one is just a new position for the window server.
+    func move(to frame: NSRect) {
+        if frame.size == self.frame.size {
+            if frame.origin != self.frame.origin { setFrameOrigin(frame.origin) }
+        } else {
+            setFrame(frame, display: true)
+        }
+    }
+
+    override func orderOut(_ sender: Any?) {
+        orderedAbove = nil
+        super.orderOut(sender)
     }
 }
 
@@ -68,15 +89,16 @@ final class OverlayController {
 
     // MARK: - Layout updates
 
-    func update(key: StripKey, result: LayoutResult, strip: Strip, display: Display, isFocusedStrip: Bool) {
-        updateTabBars(key: key, result: result)
-        updateDims(key: key, result: result, strip: strip)
+    /// `live` is set while the fingers drive the strip, so panels only move.
+    func update(key: StripKey, result: LayoutResult, strip: Strip, display: Display, isFocusedStrip: Bool, live: Bool = false) {
+        updateTabBars(key: key, result: result, live: live)
+        updateDims(key: key, result: result, strip: strip, live: live)
         if let ind = indicators[display.uuid], ind.isVisible {
             ind.update(key: key, strip: strip, result: result, display: display)
         }
     }
 
-    func updateFocus(_ frame: CGRect?) {
+    func updateFocus(_ frame: CGRect?, live: Bool = false) {
         focusedFrame = frame
         focusedID = manager.focusedKey.flatMap { manager.strips[$0]?.focusedWindow }.map { manager.window($0)?.id ?? $0 }
         guard config.focusBorder, let frame, let id = focusedID else {
@@ -85,23 +107,23 @@ final class OverlayController {
         }
         border.configure(width: config.focusBorderWidth, radius: config.focusBorderRadius, color: config.focusBorderColor)
         let current = manager.animator.currentFrame(of: id) ?? frame
-        border.show(at: current.insetBy(dx: -config.focusBorderWidth, dy: -config.focusBorderWidth), above: id)
+        border.show(at: current.insetBy(dx: -config.focusBorderWidth, dy: -config.focusBorderWidth), above: id, keepOrder: live)
     }
 
     /// Every animation frame: keep the border and dimming glued to their windows.
     func followAnimation(_ animator: Animator) {
         if config.focusBorder, let id = focusedID, border.isVisible, let f = animator.currentFrame(of: id) {
-            border.setFrame(Displays.toAppKit(f.insetBy(dx: -config.focusBorderWidth, dy: -config.focusBorderWidth)), display: false)
+            border.move(to: Displays.toAppKit(f.insetBy(dx: -config.focusBorderWidth, dy: -config.focusBorderWidth)))
         }
         for (id, panel) in dims.values.flatMap({ $0 }) where panel.isVisible {
-            if let f = animator.currentFrame(of: id) { panel.setFrame(Displays.toAppKit(f), display: false) }
+            if let f = animator.currentFrame(of: id) { panel.move(to: Displays.toAppKit(f)) }
         }
         for bars in tabBars.values {
             for bar in bars {
                 guard let id = bar.activeWindow, let f = animator.currentFrame(of: id) else { continue }
                 var r = bar.axFrame
                 r.origin.x = f.minX
-                bar.setFrame(Displays.toAppKit(r), display: false)
+                bar.move(to: Displays.toAppKit(r))
             }
         }
     }
@@ -112,7 +134,7 @@ final class OverlayController {
         for bars in tabBars.values { bars.forEach { $0.refresh() } }
     }
 
-    private func updateDims(key: StripKey, result: LayoutResult, strip: Strip) {
+    private func updateDims(key: StripKey, result: LayoutResult, strip: Strip, live: Bool) {
         var panels = dims[key] ?? [:]
         guard config.dimInactive, manager.running else {
             panels.values.forEach { $0.orderOut(nil) }
@@ -134,7 +156,7 @@ final class OverlayController {
                 return pnl
             }()
             panel.contentView?.layer?.backgroundColor = NSColor.black.withAlphaComponent(config.dimAmount).cgColor
-            panel.show(at: manager.animator.currentFrame(of: id) ?? p.frame, above: id)
+            panel.show(at: manager.animator.currentFrame(of: id) ?? p.frame, above: id, keepOrder: live)
         }
         for (id, panel) in panels where !keep.contains(id) {
             panel.orderOut(nil)
@@ -143,14 +165,14 @@ final class OverlayController {
         dims[key] = panels
     }
 
-    private func updateTabBars(key: StripKey, result: LayoutResult) {
+    private func updateTabBars(key: StripKey, result: LayoutResult, live: Bool) {
         var bars = tabBars[key] ?? []
         while bars.count > result.tabBars.count { bars.removeLast().orderOut(nil) }
         while bars.count < result.tabBars.count { bars.append(TabBarPanel()) }
         for (bar, info) in zip(bars, result.tabBars) {
             bar.configure(key: key, info: info)
             let active = info.windows.indices.contains(info.active) ? info.windows[info.active] : info.windows.first
-            bar.show(at: info.frame, above: active.map { manager.window($0)?.id ?? $0 })
+            bar.show(at: info.frame, above: active.map { manager.window($0)?.id ?? $0 }, keepOrder: live)
         }
         tabBars[key] = bars
     }
@@ -222,20 +244,36 @@ final class BorderPanel: OverlayPanel {
     }
 
     func configure(width: Double, radius: Double, color: RGBA) {
+        guard style?.width != width || style?.radius != radius || style?.color != color else { return }
+        style = (width, radius, color)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         shape.lineWidth = width
         shape.strokeColor = NSColor(srgbRed: color.r, green: color.g, blue: color.b, alpha: color.a).cgColor
+        CATransaction.commit()
         self.radius = radius
+        pathSize = nil
+        rebuildPath(for: frame.size)
     }
 
+    private var style: (width: Double, radius: Double, color: RGBA)?
     private var radius: Double = 10
+    private var pathSize: CGSize?
 
     override func setFrame(_ frameRect: NSRect, display flag: Bool) {
         super.setFrame(frameRect, display: flag)
+        rebuildPath(for: frameRect.size)
+    }
+
+    private func rebuildPath(for size: CGSize) {
+        guard size != pathSize else { return }
+        pathSize = size
+        let bounds = NSRect(origin: .zero, size: size)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let inset = shape.lineWidth / 2
-        let r = NSRect(origin: .zero, size: frameRect.size).insetBy(dx: inset, dy: inset)
-        shape.frame = NSRect(origin: .zero, size: frameRect.size)
+        let r = bounds.insetBy(dx: inset, dy: inset)
+        shape.frame = bounds
         shape.path = CGPath(roundedRect: r, cornerWidth: radius + inset, cornerHeight: radius + inset, transform: nil)
         CATransaction.commit()
     }
@@ -286,9 +324,9 @@ final class TabBarPanel: OverlayPanel {
         if changed { refresh() }
     }
 
-    override func show(at axFrame: CGRect, above window: WindowID?) {
+    override func show(at axFrame: CGRect, above window: WindowID?, keepOrder: Bool = false) {
         self.axFrame = axFrame.insetBy(dx: 0, dy: 1)
-        super.show(at: self.axFrame, above: window)
+        super.show(at: self.axFrame, above: window, keepOrder: keepOrder)
     }
 
     func refresh() {

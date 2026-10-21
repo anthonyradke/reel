@@ -860,9 +860,10 @@ final class WindowManager: WindowTrackerDelegate {
                                    display: d, animated: animate)
             }
         }
-        overlays.update(key: key, result: result, strip: strip, display: d, isFocusedStrip: key == focusedKey)
+        let live = gesture?.key == key
+        overlays.update(key: key, result: result, strip: strip, display: d, isFocusedStrip: key == focusedKey, live: live)
         if key == focusedKey {
-            overlays.updateFocus(strip.focusedWindow.flatMap { id in result.placements.first { $0.id == id && $0.visible }?.frame })
+            overlays.updateFocus(strip.focusedWindow.flatMap { id in result.placements.first { $0.id == id && $0.visible }?.frame }, live: live)
         }
         onStateChange?()
     }

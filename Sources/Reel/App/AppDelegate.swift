@@ -91,8 +91,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshStatusIcon()
     }
 
+    /// Runs after every layout (each touch frame of a swipe), so only redraw on a real change.
+    private var statusIconRunning: Bool?
     func refreshStatusIcon() {
-        guard let button = statusItem?.button else { return }
+        guard let button = statusItem?.button, statusIconRunning != wm.running else { return }
+        statusIconRunning = wm.running
         button.image = StatusIcon.image(running: wm.running)
         button.toolTip = wm.running ? "Reel is running" : "Reel is stopped"
     }
