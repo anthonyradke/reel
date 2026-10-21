@@ -38,6 +38,8 @@ final class TrackedWindow {
     var originalHeight: CGFloat
     /// Width the window settled at when it refused the width we asked for.
     var minWidth: CGFloat?
+    /// Width the window stopped at when it refused to grow as wide as we asked.
+    var maxWidth: CGFloat?
     /// The id the strip uses for this window's native tab group (its own id when not tabbed).
     var group: WindowID
     /// Last frame we asked for, and when, to tell our own moves from the user's.
@@ -314,8 +316,8 @@ final class WindowMover {
     private var inBurst = false
     private var restoreEnhancedUI = false
     private var burstEnd: DispatchWorkItem?
-    /// Called on the main thread when a window ends up wider than we asked: the app has a
-    /// minimum width. Gets the window, the size asked for and the size it actually took.
+    /// Called on the main thread when a window ends up wider or narrower than we asked: the app
+    /// has a minimum or maximum width. Gets the window, the size asked for and the size it took.
     var onSizeRefused: ((WindowID, CGSize, CGSize) -> Void)?
 
     init(name: String) {
@@ -349,11 +351,11 @@ final class WindowMover {
                     // position, and some move themselves when resized.
                     AX.setPosition(el, item.resizeAt ?? origin)
                     AX.setSize(el, size)
-                    if let actual = AX.size(el), actual.width > size.width + 4 {
+                    if let actual = AX.size(el), abs(actual.width - size.width) > 4 {
                         // Some apps (Chromium, Electron) take the new size a moment later.
-                        // Look again before deciding the window has a minimum width.
+                        // Look again before deciding the window has a minimum or maximum width.
                         queue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                            guard let actual = AX.size(el), actual.width > size.width + 4 else { return }
+                            guard let actual = AX.size(el), abs(actual.width - size.width) > 4 else { return }
                             let report = self?.onSizeRefused
                             DispatchQueue.main.async { report?(id, size, actual) }
                         }

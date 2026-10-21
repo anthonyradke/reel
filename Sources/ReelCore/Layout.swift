@@ -13,6 +13,9 @@ public struct LayoutContext {
     public var neighborRight = false
     /// Windows that refused to be as narrow as we asked; the strip spaces them by their real width.
     public var minWidths: [WindowID: Double] = [:]
+    /// Windows that wouldn't grow as wide as we asked (System Settings, for one). The column
+    /// shrinks to the window so the gaps and the focus border match what's on screen.
+    public var maxWidths: [WindowID: Double] = [:]
     /// Heights windows opened with, for Keep Original Height.
     public var originalHeights: [WindowID: Double] = [:]
 
@@ -77,6 +80,9 @@ public struct StripGeometry {
         if col.isFullWidth { w = available }
         // A window that won't shrink takes the room it needs, so nothing overlaps it.
         let minW = col.windows.compactMap { ctx.minWidths[$0] }.max() ?? 0
+        // Only cap a stack when every window in it has a limit; the widest limit wins.
+        let maxes = col.windows.compactMap { ctx.maxWidths[$0] }
+        if !maxes.isEmpty, maxes.count == col.windows.count, let maxW = maxes.max() { w = min(w, maxW) }
         return max(w, minW)
     }
 

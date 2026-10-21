@@ -87,6 +87,7 @@ final class WindowManager: WindowTrackerDelegate {
         tracker.start()
         bulkAdding = false
         for (id, width) in session?.minWidths ?? [:] { tracker.windows[id]?.minWidth = CGFloat(width) }
+        for (id, width) in session?.maxWidths ?? [:] { tracker.windows[id]?.maxWidth = CGFloat(width) }
         finishBulkAdd()
         // Saved scroll positions were for the old widths; aim each strip at its focus again.
         for k in Array(strips.keys) {
@@ -545,9 +546,15 @@ final class WindowManager: WindowTrackerDelegate {
         // Only trust the report if that's still the size we want; a later command may have
         // changed it while this one was in flight.
         guard running, let want = w.lastCommanded, abs(want.width - asked.width) < 1 else { return }
-        guard (w.minWidth ?? 0) + 2 < actual.width else { return }
-        w.minWidth = actual.width
-        Log.engine("\(w.app.name) \(w.id) keeps a minimum width of \(Int(actual.width)) (asked for \(Int(asked.width)))")
+        if actual.width > asked.width {
+            guard (w.minWidth ?? 0) + 2 < actual.width else { return }
+            w.minWidth = actual.width
+            Log.engine("\(w.app.name) \(w.id) keeps a minimum width of \(Int(actual.width)) (asked for \(Int(asked.width)))")
+        } else {
+            guard w.maxWidth.map({ abs($0 - actual.width) > 2 }) ?? true else { return }
+            w.maxWidth = actual.width
+            Log.engine("\(w.app.name) \(w.id) keeps a maximum width of \(Int(actual.width)) (asked for \(Int(asked.width)))")
+        }
         scheduleSave()
         if let k = key(containing: w.group) {
             ensureFocusedVisible(k, previous: nil)
@@ -688,6 +695,7 @@ final class WindowManager: WindowTrackerDelegate {
                 let p = (Double(f.width) + config.gap) / (geo.viewportWidth + config.gap)
                 _ = strips[k]?.setWidth(.proportion(min(1, max(0.1, p))))
                 w.minWidth = nil
+                w.maxWidth = nil
             }
             ensureFocusedVisible(k, previous: nil)
             layout(k, animated: true)
@@ -775,9 +783,17 @@ final class WindowManager: WindowTrackerDelegate {
                     scheduleSave()
                     continue
                 }
+                if w.maxWidth == nil, f.width < target.width - 4, abs(f.minX - target.minX) <= 6 {
+                    // It stopped short of the column: that's its maximum width.
+                    w.maxWidth = f.width
+                    drifted = true
+                    Log.engine("\(w.app.name) \(id) stopped at \(Int(f.width)) wide (wanted \(Int(target.width)))")
+                    scheduleSave()
+                    continue
+                }
                 let moved = abs(f.minX - target.minX) > 6 || abs(f.minY - target.minY) > 6
                 let resized = !p.keepsHeight && (abs(f.height - target.height) > 6 ||
-                    (w.minWidth == nil && abs(f.width - target.width) > 6))
+                    (w.minWidth == nil && w.maxWidth == nil && abs(f.width - target.width) > 6))
                 guard moved || resized else { healAttempts[id] = nil; continue }
                 // Some windows can't go where we ask (an app pins its own size or position).
                 // Try a few times, then leave them be until something changes.
@@ -806,6 +822,7 @@ final class WindowManager: WindowTrackerDelegate {
             for id in strip.allWindows {
                 if let w = tracker.windows[visibleMember(of: id)] {
                     if let m = w.minWidth { ctx.minWidths[id] = Double(m) }
+                    if let m = w.maxWidth { ctx.maxWidths[id] = Double(m) }
                     ctx.originalHeights[id] = Double(w.originalHeight)
                 }
             }
@@ -1221,6 +1238,7 @@ final class WindowManager: WindowTrackerDelegate {
             d["onScreen"] = animator.isVisible(w.id)
         }
         if let m = w?.minWidth { d["minWidth"] = Int(m) }
+        if let m = w?.maxWidth { d["maxWidth"] = Int(m) }
         return d
     }
 
@@ -1247,8 +1265,12 @@ final class WindowManager: WindowTrackerDelegate {
             return WindowSignature(id: id, bundleID: w.app.bundleID, title: w.title)
         }
         var minWidths: [WindowID: Double] = [:]
-        for w in tracker.windows.values { if let m = w.minWidth { minWidths[w.id] = Double(m) } }
-        SessionStore.save(SavedSession(strips: saved, floating: floats, savedAt: Date(), minWidths: minWidths))
+        var maxWidths: [WindowID: Double] = [:]
+        for w in tracker.windows.values {
+            if let m = w.minWidth { minWidths[w.id] = Double(m) }
+            if let m = w.maxWidth { maxWidths[w.id] = Double(m) }
+        }
+        SessionStore.save(SavedSession(strips: saved, floating: floats, savedAt: Date(), minWidths: minWidths, maxWidths: maxWidths))
     }
 }
 

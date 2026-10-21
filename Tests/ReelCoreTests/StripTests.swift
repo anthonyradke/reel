@@ -211,6 +211,20 @@ final class StripTests: XCTestCase {
         XCTAssertEqual(geo.starts[1], 710)
     }
 
+    func testMaxWidthNarrowsColumn() {
+        var s = strip([1, 2])
+        var c = ctx()
+        c.maxWidths[1] = 300
+        var geo = StripGeometry(strip: s, context: c)
+        XCTAssertEqual(geo.widths[0], 300)
+        XCTAssertEqual(geo.starts[1], 310)
+        // A stack is only capped when every window in it has a limit.
+        _ = s.focusWindow(2)
+        _ = s.stackInto(.left)
+        geo = StripGeometry(strip: s, context: c)
+        XCTAssertGreaterThan(geo.widths[0], 300)
+    }
+
     func testKeepOriginalHeight() {
         config.keepOriginalHeight = true
         let s = strip([1])
