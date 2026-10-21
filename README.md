@@ -177,3 +177,7 @@ model and layout code, steps the windows with the app's spring, and paints every
 any Mac and need no permissions. The recording script opens captioned TextEdit windows, drives them through `reelctl` while `screencapture` records the
 screen, and converts the recording with `scripts/mov-to-gif.swift`. Run it on an empty Space; the terminal needs the
 Screen Recording permission.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
