@@ -54,9 +54,15 @@ It's a native AppKit app with no scripting layer to set up and no dependencies o
 
 ## Installation
 
-Download `Reel.dmg` from the releases page, drag Reel to Applications and open it. The first launch walks through
-granting the Accessibility permission. The Mac Setup page in the settings checks the trackpad and Spaces options that
-Reel works best with, and warns if another window manager is running.
+Prebuilt releases aren't published yet. Build and install from source (Xcode 15.3 or later):
+
+```sh
+git clone https://github.com/anthonyradke/reel.git && cd reel
+./scripts/build-app.sh --install
+```
+
+The first launch walks through granting the Accessibility permission. The Mac Setup page in the settings checks the
+trackpad and Spaces options that Reel works best with, and warns if another window manager is running.
 
 ## Keyboard shortcuts
 
@@ -177,6 +183,16 @@ model and layout code, steps the windows with the app's spring, and paints every
 any Mac and need no permissions. The recording script opens captioned TextEdit windows, drives them through `reelctl` while `screencapture` records the
 screen, and converts the recording with `scripts/mov-to-gif.swift`. Run it on an empty Space; the terminal needs the
 Screen Recording permission.
+
+## Known limitations
+
+- macOS doesn't let a window sit entirely off screen, so columns scrolled out of view are parked at the edge of the
+  display (one point stays on screen) rather than truly hidden.
+- Windows are moved through the Accessibility API, so an app that enforces a minimum size or ignores a resize keeps
+  its own size, and a slow app animates less smoothly than the rest of the strip.
+- Spaces are read through the private SkyLight framework (read-only). A future macOS release could change it.
+- It can't run alongside another tiling window manager; both would fight over the same windows.
+- Builds are signed with a local development identity or ad hoc, not notarized.
 
 ## License
 
