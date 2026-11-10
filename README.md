@@ -52,7 +52,7 @@ It's a native AppKit app with no scripting layer to set up and no dependencies o
 - macOS 13 Ventura or later, on Apple silicon or Intel.
 - The Accessibility permission, which macOS requires for an app to move other apps' windows.
 
-## Installation
+## Install
 
 Prebuilt releases aren't published yet. Build and install from source (Xcode 15.3 or later):
 
@@ -90,20 +90,9 @@ changed, or given a second key, on the Shortcuts page.
 | ⌃⌥ , | Open settings |
 | ⌃⌥ Q | Stop Reel and bring every window back on screen |
 
-## Stacks and tabs
-
-A column normally holds one window. To put two windows in the same column, focus one of them and press ⌃⌥ [ to move
-it into the column on its left, or ⌃⌥ ] for the column on its right. The column keeps its width and splits its height
-between the windows.
-
-Inside a stack:
-
-- ⌃⌥ ↑ and ↓ move the focus between windows, and ⌃⌥⇧ ↑ and ↓ reorder them.
-- ⌃⌥⇧ = and - make the focused window taller or shorter, and ⌃⌥ 0 evens the heights out again.
-- ⌃⌥⇧ T switches the column to tabs: only one window is shown at full height, with a tab bar above it. ↑ and ↓ (or
-  clicking a tab) switch between them.
-- ⌃⌥⇧ ] takes the focused window back out into its own column on the right, ⌃⌥⇧ [ on the left. Dragging a window out
-  of a stack onto another column does the same.
+A column holds one window until another is stacked into it with ⌃⌥ [ or ]. The stack splits the column's height,
+or shows one window at a time under a tab bar after ⌃⌥⇧ T. Dragging a window onto another column, or out of one,
+does the same as the keys.
 
 ## Configuration
 
@@ -134,7 +123,7 @@ reelctl set gap 12            # change a setting
 The Automation page in the settings links `reelctl` into `~/.local/bin` and can export Raycast script commands.
 `reelctl --help` lists the actions.
 
-## Architecture
+## How it works
 
 | Module | Role |
 |---|---|
@@ -146,7 +135,7 @@ Window moves are sent from one background queue per app, so a slow or hung app o
 intermediate animation frames are dropped rather than queued when an app can't keep up. Every Accessibility call has
 a short timeout for the same reason.
 
-## Building
+## Build from source
 
 Requires Xcode 15.3 or later (Swift 5.10).
 
@@ -160,29 +149,8 @@ swift test                      # unit tests for ReelCore
 The build script signs with the first Apple Development or Developer ID identity in the keychain, or ad hoc if there
 isn't one. Signing with the same identity each time keeps the Accessibility permission across rebuilds.
 
-### Live test
-
-```sh
-python3 scripts/live-test.py
-```
-
-This drives the installed app with four TextEdit windows and runs each action through `reelctl`. After every step it
-checks that each window sits where Reel placed it, that nothing overlaps, and that scrolled-away windows are off
-screen. It takes about a minute and moves real windows, so run it when you're not using the Mac.
-
-### Screenshots and demo
-
-```sh
-swift run -c release reel-demos docs         # the animated demos in docs/
-REEL_SNAPSHOT=/tmp/shots .build/debug/Reel   # every settings page, plus hero-*.png on a wallpaper
-python3 scripts/record-demo.py               # a real screen recording, into docs/demo.gif
-```
-
-`reel-demos` draws the demos rather than recording them: it runs each script of actions through the real strip
-model and layout code, steps the windows with the app's spring, and paints every frame. They come out the same on
-any Mac and need no permissions. The recording script opens captioned TextEdit windows, drives them through `reelctl` while `screencapture` records the
-screen, and converts the recording with `scripts/mov-to-gif.swift`. Run it on an empty Space; the terminal needs the
-Screen Recording permission.
+[docs/development.md](docs/development.md) covers the live test that drives real windows and the tooling that
+generates the demos and screenshots.
 
 ## Known limitations
 
