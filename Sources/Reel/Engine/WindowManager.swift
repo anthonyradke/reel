@@ -193,12 +193,7 @@ final class WindowManager: WindowTrackerDelegate {
 
     func refreshSpaces() {
         let spaces = SkyLight.currentSpaces()
-        var keys: [String: StripKey] = [:]
-        for d in displays {
-            let space = spaces.perDisplay[d.uuid] ?? spaces.shared ?? 0
-            keys[d.uuid] = StripKey(display: d.uuid, space: space)
-        }
-        activeKeys = keys
+        activeKeys = SpaceMap.activeKeys(displays: displays.map(\.uuid), perDisplay: spaces.perDisplay, shared: spaces.shared)
         if let fk = focusedKey, !activeKeys.values.contains(fk) {
             focusedKey = activeKeys[fk.display] ?? activeKeys.values.first
         }
@@ -254,11 +249,10 @@ final class WindowManager: WindowTrackerDelegate {
 
     /// Picks up windows the user moved to another Space with Mission Control.
     private func reassignWindowsToCurrentSpaces() {
-        let activeSpaces = Dictionary(uniqueKeysWithValues: activeKeys.values.map { ($0.space, $0) })
         for (key, strip) in strips {
             for id in strip.allWindows {
-                let spaces = SkyLight.spaces(for: id)
-                guard let s = spaces.first, s != key.space, let newKey = activeSpaces[s] else { continue }
+                guard let s = SkyLight.spaces(for: id).first,
+                      let newKey = SpaceMap.reassignment(of: key, windowSpace: s, active: activeKeys) else { continue }
                 strips[key]?.remove(id)
                 var t = strips[newKey] ?? Strip()
                 t.insert(id, width: .proportion(config.defaultWidth), at: .rightOfFocused, focus: false)
@@ -307,14 +301,11 @@ final class WindowManager: WindowTrackerDelegate {
         let frame = w.frame ?? .zero
         guard let d = Displays.display(for: frame, in: displays) else { return mainKey }
         guard isManaged(display: d.uuid) else { return nil }
-        let active = activeKeys[d.uuid]
         if let space = SkyLight.spaces(for: w.id).first {
             if SkyLight.isFullscreenSpace(space) { return nil }
-            // Windows on another display's current Space belong there.
-            if let k = activeKeys.values.first(where: { $0.space == space }) { return k }
-            return StripKey(display: d.uuid, space: space)
+            return SpaceMap.key(forWindowOn: d.uuid, space: space, active: activeKeys)
         }
-        return active
+        return activeKeys[d.uuid]
     }
 
     func key(containing id: WindowID) -> StripKey? {

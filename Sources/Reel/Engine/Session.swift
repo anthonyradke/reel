@@ -1,13 +1,6 @@
 import Foundation
 import ReelCore
 
-/// Which strip a window lives on: a display and one of its Spaces.
-struct StripKey: Hashable, Codable, CustomStringConvertible {
-    var display: String
-    var space: UInt64
-    var description: String { "\(display.prefix(8))/\(space)" }
-}
-
 /// Enough about a window to find it again after Reel (or the Mac) restarts.
 struct WindowSignature: Codable, Hashable {
     var id: WindowID
