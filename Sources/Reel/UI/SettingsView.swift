@@ -369,8 +369,8 @@ struct AutomationPage: View {
     @State private var cliMessage = ""
 
     var body: some View {
-        Section(title: "URL scheme", footer: "Every shortcut action has a URL. Use them from Shortcuts, Alfred, Keyboard Maestro or a browser bookmark.") {
-            ForEach(["reel://focus-right", "reel://cycle-width", "reel://move-to-1", "reel://pin-left", "reel://scroll:300"], id: \.self) { u in
+        Section(title: "URL scheme", footer: "Any web page can open a reel:// link, so links only open the settings or show the strip. Window actions run through reelctl, which Shortcuts, Alfred and Keyboard Maestro can call as a shell script.") {
+            ForEach(["reel://settings", "reel://show-indicator"], id: \.self) { u in
                 HStack {
                     Text(u).font(.system(.body, design: .monospaced)).textSelection(.enabled)
                     Spacer()
@@ -392,7 +392,7 @@ struct AutomationPage: View {
     }
 
     private func installCLI() {
-        guard let src = Bundle.main.url(forAuxiliaryExecutable: "reelctl") ?? Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("reelctl") else {
+        guard let src = RaycastScripts.reelctlURL else {
             cliMessage = "reelctl isn't in this build."
             return
         }

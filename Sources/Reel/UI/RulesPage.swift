@@ -143,7 +143,14 @@ enum RaycastScripts {
         (.retile, "Re-tile Everything"), (.toggleRunning, "Start or Stop Reel"),
     ]
 
+    /// The reelctl next to the app's own executable.
+    static var reelctlURL: URL? {
+        Bundle.main.url(forAuxiliaryExecutable: "reelctl") ?? Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("reelctl")
+    }
+
     static func export() {
+        guard let reelctl = reelctlURL else { return }
+        let quoted = "'" + reelctl.path.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -162,7 +169,7 @@ enum RaycastScripts {
             # @raycast.packageName Reel
             # @raycast.icon 🎞️
 
-            open -g "reel://\(cmd.name)"
+            \(quoted) \(cmd.name) > /dev/null
 
             """
             let url = folder.appendingPathComponent("reel-\(cmd.name).sh")

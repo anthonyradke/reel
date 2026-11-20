@@ -68,14 +68,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     }
 
-    // MARK: - URL scheme: reel://focus-left, reel://move-to-3, reel://scroll:200
+    // MARK: - URL scheme: reel://settings, reel://show-indicator
 
+    /// Links only open the settings or show the strip (`Command.allowedFromLink`); a web page can
+    /// open them too. Window actions go through the socket: `reelctl focus-left`.
     @objc private func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
         guard let s = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
               let url = URL(string: s) else { return }
-        let name = ((url.host ?? "") + url.path).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let cmd = Command(name: name.replacingOccurrences(of: "/", with: "-")) else {
-            Log.engine("url: unknown command \(name)")
+        guard let cmd = Command.fromLink(url) else {
+            let name = ((url.host ?? "") + url.path).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if !name.isEmpty { Log.engine("url: ignored \(name); links only open settings or show the strip, use reelctl for actions") }
             return
         }
         wm.perform(cmd)

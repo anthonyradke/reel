@@ -111,16 +111,17 @@ and is reloaded as soon as it's saved.
 
 ## Scripting
 
-Every action has a name and can be triggered from outside the app in three ways:
+`reelctl` runs any action over a Unix socket that only the user's own processes can open:
 
 ```sh
-open -g reel://focus-right    # URL scheme
-reelctl move-to-3             # command line client
+reelctl move-to-3             # any action
 reelctl status                # strips and windows as JSON
 reelctl set gap 12            # change a setting
+open -g reel://settings       # links: settings and show-indicator only
 ```
 
-The Automation page in the settings links `reelctl` into `~/.local/bin` and can export Raycast script commands.
+Any web page can open a `reel://` link, so links never move windows. If Reel isn't running, `reelctl` launches it
+first. The Automation page links `reelctl` into `~/.local/bin` and exports Raycast script commands that call it.
 `reelctl --help` lists the actions.
 
 ## How it works

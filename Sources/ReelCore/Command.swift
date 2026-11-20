@@ -95,6 +95,26 @@ public enum Command: Equatable, Hashable {
         }
     }
 
+    /// Whether a `reel://` link may run this command. Any web page can open a link (the browser
+    /// only asks once per site), so links get the commands that change nothing: the settings
+    /// window and the strip indicator. Everything that moves windows or starts and stops the
+    /// engine needs the socket, which only the user's own processes can reach (`reelctl`).
+    public var allowedFromLink: Bool {
+        switch self {
+        case .openSettings, .showIndicator: return true
+        default: return false
+        }
+    }
+
+    /// The command a `reel://` link names (`reel://settings`), if it is one links may run.
+    /// A bare `reel://` names nothing; opening it only launches the app.
+    public static func fromLink(_ url: URL) -> Command? {
+        guard url.scheme?.lowercased() == "reel" else { return nil }
+        let name = ((url.host ?? "") + url.path).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let cmd = Command(name: name.replacingOccurrences(of: "/", with: "-")), cmd.allowedFromLink else { return nil }
+        return cmd
+    }
+
     /// Every bindable command, in the order the Shortcuts page lists them.
     public static let all: [Command] = {
         var list: [Command] = Direction.allCases.map { .focus($0) }

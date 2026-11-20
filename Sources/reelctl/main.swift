@@ -59,15 +59,26 @@ if let reply = send(line) {
     exit(reply.contains("\"error\"") ? 2 : 0)
 }
 
-// Not running (or no socket yet): plain actions can still go through the URL scheme,
-// which launches Reel if needed.
+// Not running (or no socket yet): launch Reel and send plain actions once its socket is up.
+// Actions only ever go over the socket; reel:// links can't move windows (Command.allowedFromLink).
 if !["status", "windows", "list", "config", "set", "ping"].contains(args[0].lowercased()) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    p.arguments = ["-g", "reel://\(args[0])"]
+    p.arguments = ["-g", "-b", "app.reel"]
     try? p.run()
     p.waitUntilExit()
-    exit(p.terminationStatus)
+    guard p.terminationStatus == 0 else {
+        FileHandle.standardError.write("reelctl: couldn't launch Reel\n".data(using: .utf8)!)
+        exit(1)
+    }
+    for _ in 0..<50 {
+        usleep(200_000)
+        guard send("ping") != nil, let reply = send(line) else { continue }
+        print(reply.trimmingCharacters(in: .whitespacesAndNewlines))
+        exit(reply.contains("\"error\"") ? 2 : 0)
+    }
+    FileHandle.standardError.write("reelctl: Reel didn't open its socket\n".data(using: .utf8)!)
+    exit(1)
 }
 FileHandle.standardError.write("reelctl: Reel isn't running\n".data(using: .utf8)!)
 exit(1)
