@@ -41,4 +41,31 @@ final class RobustnessTests: XCTestCase {
         XCTAssertEqual(s.pinned[.right]?.windows, [2])
         XCTAssertEqual(s.focusedWindow, 2)
     }
+
+    func testConfigClampsValuesThatBreakTheEngine() throws {
+        let json = #"{"gap":-20,"outerGap":5000,"springResponse":0,"widthStep":-0.1,"defaultWidth":0,"swipeFingers":7,"tabBarHeight":2,"dimAmount":3}"#
+        let c = try JSONDecoder().decode(Config.self, from: Data(json.utf8))
+        XCTAssertEqual(c.gap, 0)
+        XCTAssertEqual(c.outerGap, 200)
+        XCTAssertGreaterThan(c.springResponse, 0)
+        XCTAssertGreaterThan(c.widthStep, 0)
+        XCTAssertGreaterThan(c.defaultWidth, 0)
+        XCTAssertEqual(c.swipeFingers, 4)
+        XCTAssertEqual(c.tabBarHeight, 10)
+        XCTAssertEqual(c.dimAmount, 1)
+        // A spring at the lowest allowed stiffness still comes to rest.
+        var spring = Spring(0, omega: c.springResponse)
+        spring.target = 500
+        var steps = 0
+        while spring.step(1.0 / 60) { steps += 1; if steps > 10_000 { break } }
+        XCTAssertLessThan(steps, 10_000)
+    }
+
+    func testConfigKeepsValuesInTheSlidersRanges() throws {
+        var c = Config()
+        c.gap = 48; c.outerGap = 0; c.springResponse = 10; c.widthStep = 0.05; c.pinnedWidth = 0.6
+        c.swipeFingers = 0
+        let back = try JSONDecoder().decode(Config.self, from: JSONEncoder().encode(c))
+        XCTAssertEqual(back, c)
+    }
 }

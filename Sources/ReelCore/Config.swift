@@ -102,10 +102,33 @@ extension Config {
         take(.floatFixedSizeWindows, &floatFixedSizeWindows)
         take(.bindings, &bindings)
         take(.hasCompletedOnboarding, &hasCompletedOnboarding)
+        clampValues()
         // Actions added in a later version get their default keys.
         for (name, combos) in Config.defaultBindings where bindings[name] == nil {
             bindings[name] = combos
         }
+    }
+
+    /// Pulls numbers edited by hand (or with `reelctl set`) back into a range the engine can
+    /// work with. The bounds are wider than the settings sliders; they only stop values that
+    /// break things, like a spring with no stiffness that never settles or a negative gap.
+    public mutating func clampValues() {
+        func clamp(_ v: inout Double, _ lo: Double, _ hi: Double, _ fallback: Double) {
+            v = v.isFinite ? min(max(v, lo), hi) : fallback
+        }
+        let d = Config()
+        clamp(&gap, 0, 200, d.gap)
+        clamp(&outerGap, 0, 200, d.outerGap)
+        clamp(&defaultWidth, 0.05, 1, d.defaultWidth)
+        clamp(&widthStep, 0.01, 1, d.widthStep)
+        clamp(&pinnedWidth, 0.05, 0.9, d.pinnedWidth)
+        clamp(&springResponse, 2, 200, d.springResponse)
+        clamp(&focusBorderWidth, 0, 50, d.focusBorderWidth)
+        clamp(&focusBorderRadius, 0, 100, d.focusBorderRadius)
+        clamp(&dimAmount, 0, 1, d.dimAmount)
+        clamp(&tabBarHeight, 10, 120, d.tabBarHeight)
+        clamp(&swipeSensitivity, 0.1, 10, d.swipeSensitivity)
+        if ![0, 3, 4].contains(swipeFingers) { swipeFingers = d.swipeFingers }
     }
 
     public var sortedPresets: [Double] {
