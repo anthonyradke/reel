@@ -41,11 +41,18 @@ extension Strip {
         guard let loc = locate(id) else { return false }
         switch loc {
         case .pinned(let side, let row):
-            pinned[side]!.windows.remove(at: row)
-            pinned[side]!.normalizeWeightsAfterRemoval(row)
-            if pinned[side]!.windows.isEmpty {
+            var col = pinned[side]!
+            col.windows.remove(at: row)
+            col.normalizeWeightsAfterRemoval(row)
+            if col.windows.isEmpty {
                 pinned[side] = nil
                 if focusedPin == side { focusedPin = nil }
+            } else {
+                // Same as a stack on the strip: the row above takes focus, and the index stays
+                // in range (popOut and moveInStack index windows with it once it's unpinned).
+                if col.active >= row && col.active > 0 { col.active -= 1 }
+                col.clampActive()
+                pinned[side] = col
             }
         case .strip(let c, let row):
             columns[c].windows.remove(at: row)
