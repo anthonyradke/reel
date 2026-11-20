@@ -21,15 +21,18 @@ final class IPCServer {
         _ = withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
             path.withCString { strncpy(UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self), $0, 103) }
         }
+        // bind() creates the socket file with the umask's mode, so narrow it first: with a
+        // chmod afterwards, another user could connect in the moment between the two.
+        let oldMask = umask(0o177)
         let ok = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
+        umask(oldMask)
         guard ok == 0, listen(fd, 8) == 0 else {
             Log.engine("ipc: could not listen on \(path)")
             close(fd); fd = -1
             return
         }
-        chmod(path, 0o600)
         let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         src.setEventHandler { [weak self] in self?.accept() }
         src.resume()
@@ -39,6 +42,14 @@ final class IPCServer {
     private func accept() {
         let client = Darwin.accept(fd, nil, nil)
         guard client >= 0 else { return }
+        defer { close(client) }
+        // A client that quits before the reply must not kill Reel with SIGPIPE, and one that
+        // never sends its line must not hold up every later request on this queue.
+        var on: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var data = Data()
         var buf = [UInt8](repeating: 0, count: 4096)
         // Read one line (or until the client closes its side).
@@ -46,19 +57,32 @@ final class IPCServer {
             let n = read(client, &buf, buf.count)
             if n <= 0 { break }
             data.append(buf, count: n)
-            if data.contains(10) { break }
+            if data.contains(10) || data.count > 65_536 { break }
         }
         let line = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let box = ReplyBox()
         let sem = DispatchSemaphore(value: 0)
-        var reply = ""
         DispatchQueue.main.async {
-            reply = Self.handle(line)
+            box.set(Self.handle(line))
             sem.signal()
         }
-        _ = sem.wait(timeout: .now() + 5)
-        let out = (reply + "\n").data(using: .utf8)!
-        out.withUnsafeBytes { _ = write(client, $0.baseAddress, out.count) }
-        close(client)
+        let reply = sem.wait(timeout: .now() + 5) == .success ? box.get() : #"{"error":"timed out"}"#
+        let out = Array((reply + "\n").utf8)
+        var sent = 0
+        while sent < out.count {
+            let n = out.withUnsafeBytes { write(client, $0.baseAddress! + sent, out.count - sent) }
+            if n <= 0 { break }
+            sent += n
+        }
+    }
+
+    /// The reply, written on the main thread and read here; after a timeout the main thread may
+    /// still finish later, so the two sides share it under a lock.
+    private final class ReplyBox {
+        private let lock = NSLock()
+        private var value = ""
+        func set(_ v: String) { lock.lock(); value = v; lock.unlock() }
+        func get() -> String { lock.lock(); defer { lock.unlock() }; return value }
     }
 
     /// Runs one request on the main thread.
